@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="nb">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Lag en praktisk middagsplan fra ukens beste dagligvaretilbud." />
+    <meta name="theme-color" content="#0b302f" />
+    <title>Tilbudsplan</title>
+    <link rel="preload" href="assets/ukesmat.webp" as="image" type="image/webp" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#tilbud" aria-label="Tilbudsplan – gå til tilbud">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <span>Tilbudsplan</span>
+      </a>
+      <div class="top-meta" aria-live="polite">
+        <span id="week-label">Uke –</span>
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="data-status">Henter tilbud …</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <img src="assets/ukesmat.webp" alt="Smaksrike hverdagsretter med kylling, laks, grønnsaker og bønner på et kjøkkenbord" />
+        <div class="hero-shade"></div>
+        <div class="hero-copy">
+          <p class="eyebrow">Tilbud → middag → én handleliste</p>
+          <h1 id="hero-title">God middag. Mindre butikkstyr.</h1>
+          <p>Velg kuppene du faktisk vil bruke. Resten ordner planen.</p>
+          <div class="hero-stats" aria-label="Datastatus">
+            <span><strong id="offer-count">–</strong> tilbud</span>
+            <span><strong id="store-count">–</strong> butikker</span>
+            <span><strong id="quality-score">–</strong> datakvalitet</span>
+          </div>
+        </div>
+      </section>
+
+      <nav class="flow-tabs" aria-label="Tilbudsplanens steg">
+        <button class="flow-tab is-active" type="button" data-view="offers" aria-current="step">
+          <span>1</span> Velg tilbud <b id="selected-count-badge">0</b>
+        </button>
+        <button class="flow-tab" type="button" data-view="plan">
+          <span>2</span> Ukeplan <b id="plan-count-badge">0</b>
+        </button>
+        <button class="flow-tab" type="button" data-view="list">
+          <span>3</span> Handleliste <b id="list-count-badge">0</b>
+        </button>
+      </nav>
+
+      <section id="offers-view" class="view is-active" aria-labelledby="offers-heading">
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Steg 1</p>
+            <h2 id="offers-heading">Hva frister denne uka?</h2>
+            <p>Velg råvarer du vil bygge uka rundt. Marker «ikke bruk» på tilbud du vil slippe.</p>
+          </div>
+          <button id="clear-choices" class="text-button" type="button">Nullstill valg</button>
+        </div>
+
+        <div class="offer-layout">
+          <aside class="filters" aria-label="Filtrer tilbud">
+            <label class="search-box">
+              <span>Søk</span>
+              <input id="offer-search" type="search" placeholder="Kylling, ost, Kiwi …" autocomplete="off" />
+            </label>
+
+            <fieldset>
+              <legend>Butikk</legend>
+              <div id="store-filters" class="filter-list"></div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Varetype</legend>
+              <div id="category-filters" class="filter-list"></div>
+            </fieldset>
+
+            <label class="switch-row">
+              <input id="deals-only" type="checkbox" checked />
+              <span>Vis reelle kupp først</span>
+            </label>
+
+            <div class="source-note">
+              <strong>Datagrunnlag</strong>
+              <p id="source-updated">Oppdateres ukentlig fra eTilbudsavis-data.</p>
+              <a href="https://github.com/Olewol/tilbudsavis" target="_blank" rel="noreferrer">Se åpen kilde ↗</a>
+            </div>
+          </aside>
+
+          <div class="offers-main">
+            <div class="offers-toolbar">
+              <p id="result-count" aria-live="polite">Laster tilbud …</p>
+              <select id="sort-offers" aria-label="Sorter tilbud">
+                <option value="best">Beste kupp</option>
+                <option value="price">Laveste pris</option>
+                <option value="store">Butikk</option>
+              </select>
+            </div>
+            <div id="offers-grid" class="offers-grid" aria-live="polite"></div>
+            <div id="empty-offers" class="empty-state" hidden>
+              <h3>Ingen tilbud passer filteret</h3>
+              <p>Prøv flere butikker eller fjern søkeordet.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="sticky-action">
+          <div>
+            <strong id="sticky-selection">0 tilbud valgt</strong>
+            <span id="sticky-hint">Velg gjerne 3–8 tilbud</span>
+          </div>
+          <button id="go-to-plan" class="primary-button" type="button">Lag ukeplan <span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+
+      <section id="plan-view" class="view" aria-labelledby="plan-heading">
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Steg 2</p>
+            <h2 id="plan-heading">Middager bygget på valgene dine</h2>
+            <p>Smaksrik først, men med gjenbruk av råvarer og færrest mulig butikkturer.</p>
+          </div>
+          <button id="back-to-offers" class="text-button" type="button">← Endre tilbud</button>
+        </div>
+
+        <div class="plan-controls">
+          <label>
+            <span>Antall middager</span>
+            <select id="meal-count">
+              <option value="3">3 middager</option>
+              <option value="4">4 middager</option>
+              <option value="5" selected>5 middager</option>
+              <option value="6">6 middager</option>
+              <option value="7">7 middager</option>
+            </select>
+          </label>
+          <label>
+            <span>Porsjoner</span>
+            <select id="servings">
+              <option value="2">2 personer</option>
+              <option value="4" selected>4 personer</option>
+              <option value="6">6 personer</option>
+            </select>
+          </label>
+          <label>
+            <span>Maks butikker</span>
+            <select id="max-stores">
+              <option value="1">1 butikk</option>
+              <option value="2">2 butikker</option>
+              <option value="3" selected>3 butikker</option>
+              <option value="8">Alle butikker</option>
+            </select>
+          </label>
+          <button id="generate-plan" class="primary-button" type="button">Lag ny kombinasjon</button>
+        </div>
+
+        <div id="plan-summary" class="plan-summary" hidden></div>
+        <div id="meal-plan" class="meal-plan"></div>
+        <div id="plan-empty" class="empty-state">
+          <h3>Ukeplanen venter på tilbudene dine</h3>
+          <p>Velg noen råvarer først, eller la oss finne de beste kuppene automatisk.</p>
+          <button id="auto-plan" class="primary-button" type="button">Bruk ukens beste</button>
+        </div>
+
+        <div class="plan-actions">
+          <button id="regenerate-bottom" class="secondary-button" type="button">Bland middager</button>
+          <button id="go-to-list" class="primary-button" type="button">Lag handleliste <span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+
+      <section id="list-view" class="view" aria-labelledby="list-heading">
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Steg 3</p>
+            <h2 id="list-heading">Alt samlet. Sortert for butikken.</h2>
+            <p>Tilbudsvarer står med butikk og pris. Basisvarer kan du krysse av hjemmefra.</p>
+          </div>
+          <button id="back-to-plan" class="text-button" type="button">← Til ukeplan</button>
+        </div>
+
+        <div id="shopping-overview" class="shopping-overview"></div>
+        <div class="list-toolbar">
+          <button id="check-pantry" class="secondary-button" type="button">Kryss av basisvarer</button>
+          <button id="copy-list" class="secondary-button" type="button">Kopier liste</button>
+          <button id="clear-checked" class="text-button" type="button">Fjern avkryssinger</button>
+        </div>
+        <div id="shopping-list" class="shopping-list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
