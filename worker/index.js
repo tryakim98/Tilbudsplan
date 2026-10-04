@@ -1,3 +1,5 @@
+import { validateProfile, withDefaults } from "../dist/model.js";
+export { validateProfile };
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -21,61 +23,6 @@ function db(env) {
   if (!env.DB) throw new Error("Storage binding unavailable");
   return env.DB;
 }
-export function validateProfile(data) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-  if (
-    typeof data.name !== "string" ||
-    !data.name.trim() ||
-    data.name.length > 60
-  )
-    return false;
-  for (const key of [
-    "saved",
-    "dislikes",
-    "favorites",
-    "goals",
-    "plan",
-    "checked",
-    "selected",
-    "excluded",
-    "stores",
-  ]) {
-    if (
-      !Array.isArray(data[key]) ||
-      data[key].length > 500 ||
-      data[key].some((x) => typeof x !== "string" || x.length > 300)
-    )
-      return false;
-  }
-  if (
-    data.plan.length > 7 ||
-    ![1, 2, 3, 4, 5, 6, 8].includes(data.servings) ||
-    !Number.isInteger(data.days) ||
-    data.days < 1 ||
-    data.days > 7 ||
-    ![1, 2, 3, 8].includes(data.maxStores)
-  )
-    return false;
-  if (
-    !data.ratings ||
-    typeof data.ratings !== "object" ||
-    Array.isArray(data.ratings) ||
-    Object.values(data.ratings).some(
-      (x) => !Number.isInteger(x) || x < 1 || x > 5,
-    )
-  )
-    return false;
-  if (
-    !data.notes ||
-    typeof data.notes !== "object" ||
-    Array.isArray(data.notes) ||
-    Object.values(data.notes).some(
-      (x) => typeof x !== "string" || x.length > 3000,
-    )
-  )
-    return false;
-  return JSON.stringify(data).length < 80000;
-}
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -91,9 +38,13 @@ export default {
             .map((x) => x.toString(16).padStart(2, "0"))
             .join("");
           const body = await request.text();
-          if (body.length > 85000)
+          if (body.length > 250000)
             return json({ error: "Profilen er for stor" }, 413);
-          const data = JSON.parse(body);
+          const rawData = JSON.parse(body);
+          const data =
+            rawData && typeof rawData === "object"
+              ? withDefaults(rawData)
+              : rawData;
           if (!validateProfile(data))
             return json({ error: "Kontroller profilfeltene" }, 400);
           await db(env)
@@ -134,9 +85,14 @@ export default {
         }
         if (request.method === "PUT") {
           const raw = await request.text();
-          if (raw.length > 85000)
+          if (raw.length > 250000)
             return json({ error: "Profilen er for stor" }, 413);
-          const { data, revision } = JSON.parse(raw);
+          const parsed = JSON.parse(raw);
+          const revision = parsed?.revision;
+          const data =
+            parsed?.data && typeof parsed.data === "object"
+              ? withDefaults(parsed.data)
+              : parsed?.data;
           if (
             !validateProfile(data) ||
             !Number.isInteger(revision) ||

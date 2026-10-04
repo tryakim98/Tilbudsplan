@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import worker, { validateProfile } from "../worker/index.js";
 import { emptyProfile } from "../dist/engine.js";
+import { localDate } from "../dist/model.js";
 const sql = new DatabaseSync(":memory:");
 sql.exec(
   readFileSync(
@@ -156,6 +157,133 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   assert.equal(saved.data.plan.length, 5);
   assert.equal(saved.data.checked.length, 1);
   assert.ok(saved.data.dislikes.includes("chicken"));
-  await wait(3500);
+  const submit = (id) =>
+    $(id).dispatchEvent(
+      new window.Event("submit", { bubbles: true, cancelable: true }),
+    );
+  click('[data-view="pantry"]');
+  $("pantry-ingredient").value = "rice";
+  change($("pantry-ingredient"));
+  $("pantry-quantity").value = "150";
+  submit("pantry-form");
+  assert.ok($("pantry-list").textContent.includes("150"));
+  click('[data-view="cookbook"]');
+  click("#new-recipe");
+  $("custom-title").value = "Restepanne";
+  $("custom-time").value = "15";
+  document.querySelector(".custom-quantity").value = "200";
+  click("#add-ingredient");
+  const rows = document.querySelectorAll(".ingredient-row");
+  rows[1].querySelector("select").value = "eggs";
+  rows[1].querySelector("input").value = "2";
+  $("custom-steps").value = "Kok risen.\nStek eggene og bland.";
+  submit("recipe-form");
+  assert.equal($("recipe-error").textContent, "");
+  const customId =
+    document.querySelector("[data-edit-recipe]").dataset.editRecipe;
+  assert.ok($("recipe-detail").textContent.includes("Restepanne"));
+  click('[data-add="' + customId + '"]');
+  click("#close-recipe");
+  click('[data-view="plan"]');
+  while (document.querySelectorAll(".meal-card").length > 1)
+    click('[data-remove-meal="0"]');
+  click('[data-lock="0"]');
+  $("budget-input").value = "1";
+  change($("budget-input"));
+  $("max-time").value = "20";
+  change($("max-time"));
+  $("meal-count").value = "3";
+  change($("meal-count"));
+  assert.equal(
+    document.querySelector(".meal-copy h3").textContent,
+    "Restepanne",
+  );
+  assert.ok($("budget-status").textContent.includes("over budsjettet"));
+  click('[data-view="offers"]');
+  $("offer-ingredient").value = "rice";
+  $("offer-name").value = "Rispose";
+  $("offer-store").value = "Nærbutikken";
+  $("offer-price").value = "5";
+  $("offer-quantity").value = "200";
+  $("offer-from").value = localDate();
+  $("offer-until").value = localDate();
+  submit("offer-form");
+  assert.equal($("offer-error").textContent, "");
+  assert.ok($("offers-grid").textContent.includes("Rispose"));
+  click('[data-view="list"]');
+  assert.ok(
+    $("shopping-list").textContent.includes("Rispose"),
+    $("shopping-list").textContent,
+  );
+  const allTotal =
+    $("shopping-overview").querySelectorAll("strong")[1].textContent;
+  const item = document.querySelector("[data-checked]");
+  item.checked = true;
+  change(item);
+  assert.equal(
+    $("shopping-overview").querySelectorAll("strong")[1].textContent,
+    allTotal,
+  );
+  await wait(500);
+  const revised = await (await api("GET", null, key)).json();
+  assert.equal(revised.data.customRecipes[0].id, customId);
+  assert.equal(revised.data.plan[0], customId);
+  assert.deepEqual(revised.data.locked, [0]);
+  assert.equal(revised.data.pantry.rice, 150);
+  assert.equal(revised.data.manualOffers[0].price, 5);
+  assert.equal(revised.data.budget, 1);
+  assert.equal(revised.data.maxTime, 20);
+  assert.ok($("save-status").textContent.includes("Lagret"));
+
+  // Lost PUT responses must not strand a profile in a false conflict.
+  const normalFetch = globalThis.fetch;
+  let loseResponse = true;
+  globalThis.fetch = async (url, opts = {}) => {
+    const result = await normalFetch(url, opts);
+    if (opts.method === "PUT" && loseResponse) {
+      loseResponse = false;
+      throw new Error("Simulated lost response after committed write");
+    }
+    return result;
+  };
+  click('[data-recipe="' + customId + '"]');
+  $("recipe-note").value = "Et notat som skal tåle tapt svar";
+  $("recipe-note").dispatchEvent(new window.Event("input", { bubbles: true }));
+  await wait(500);
+  assert.ok($("save-status").textContent.includes("Lagret"));
+  assert.equal(
+    (await (await api("GET", null, key)).json()).data.notes[customId],
+    "Et notat som skal tåle tapt svar",
+  );
+
+  // Edits made during a write remain queued and cannot be called saved early.
+  let release,
+    started = false;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  globalThis.fetch = async (url, opts = {}) => {
+    const result = await normalFetch(url, opts);
+    if (opts.method === "PUT" && !started) {
+      started = true;
+      await gate;
+    }
+    return result;
+  };
+  $("recipe-note").value = "Første endring";
+  $("recipe-note").dispatchEvent(new window.Event("input", { bubbles: true }));
+  await wait(400);
+  assert.ok(started);
+  $("recipe-note").value = "Siste endring";
+  $("recipe-note").dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.ok(!$("save-status").textContent.includes("Lagret"));
+  release();
+  await wait(500);
+  assert.equal(
+    (await (await api("GET", null, key)).json()).data.notes[customId],
+    "Siste endring",
+  );
+  assert.ok($("save-status").textContent.includes("Lagret"));
+  globalThis.fetch = normalFetch;
   await window.happyDOM.close();
 });

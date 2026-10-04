@@ -1599,3 +1599,223 @@ fieldset {
     min-width: 95px;
   }
 }
+
+/* Personal kitchen tools follow the existing quiet green palette. */
+.public-label {
+  font-size: 0.875rem;
+  padding: 6px 10px;
+  border: 1px solid currentColor;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.planning-options,
+.entry-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+.planning-options {
+  margin: 0 0 22px;
+}
+.planning-options label,
+.entry-form label,
+.ingredient-row label,
+.stack-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  min-width: 0;
+}
+.planning-options input,
+.planning-options select,
+.entry-form input:not([type="checkbox"]),
+.entry-form select,
+.ingredient-row input,
+.ingredient-row select,
+.stack-label input,
+.stack-label textarea,
+#copy-text {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #b7c6bf;
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: #fff;
+  color: #153734;
+  font: inherit;
+}
+.entry-panel {
+  padding: 20px;
+  margin-bottom: 24px;
+  background: #eef3ef;
+  border: 1px solid #d1ded5;
+  border-radius: 12px;
+}
+.entry-panel summary {
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.entry-panel p {
+  max-width: 75ch;
+  line-height: 1.6;
+}
+.check-line,
+.entry-form .check-line {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9375rem;
+  font-weight: 400;
+}
+.check-line input {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.list-toolbar {
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.pantry-list {
+  margin: 24px 0;
+}
+.pantry-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid #d1ded5;
+}
+.pantry-match {
+  color: #225b38;
+  font-weight: 600;
+}
+.ingredient-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) minmax(100px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0;
+}
+.stack-label {
+  margin: 22px 0;
+}
+#editor-dialog,
+#copy-dialog {
+  width: min(760px, calc(100vw - 28px));
+  padding: 30px;
+  max-height: 90dvh;
+  border: 0;
+  border-radius: 16px;
+  color: #153734;
+}
+#editor-dialog h2,
+#copy-dialog h2 {
+  padding-right: 35px;
+}
+dialog::backdrop {
+  background: #0b302f99;
+}
+.lock-meal {
+  width: 100%;
+  margin: 10px 0;
+}
+.meal-card.is-locked {
+  border-color: #4c735d;
+}
+.lock-meal[aria-pressed="true"] {
+  background: #dceccf;
+  color: #12352b;
+}
+.over-budget {
+  border-left-color: #a66313;
+  background: #fff1d9;
+}
+.at-home {
+  background: #edf4e8;
+}
+.at-home label {
+  cursor: default;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+[hidden] {
+  display: none !important;
+}
+@media (max-width: 700px) {
+  .public-label {
+    display: none;
+  }
+  .planning-options,
+  .entry-form {
+    grid-template-columns: 1fr;
+  }
+  .ingredient-row {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  }
+  .ingredient-row > button {
+    grid-column: 1/-1;
+    justify-self: start;
+  }
+  .pantry-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  #editor-dialog,
+  #copy-dialog {
+    padding: 22px 18px;
+  }
+  .list-toolbar {
+    align-items: stretch;
+  }
+  .planning-options input,
+  .entry-form input,
+  .entry-form select,
+  .ingredient-row input,
+  .ingredient-row select {
+    font-size: 1rem;
+  }
+}
+@media print {
+  .topbar,
+  .intro,
+  .profile-strip,
+  .notice,
+  .flow-tabs,
+  .app-footer,
+  .view,
+  .list-toolbar,
+  #copy-list,
+  dialog,
+  .toast {
+    display: none !important;
+  }
+  #list-view {
+    display: block !important;
+  }
+  main {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    background: white;
+    color: black;
+  }
+  .shopping-item,
+  .list-section {
+    break-inside: avoid;
+  }
+  .shopping-item.is-checked {
+    display: none;
+  }
+}

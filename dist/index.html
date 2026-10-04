@@ -23,6 +23,7 @@
         ><span class="brand-mark">T</span>Tilbudsplan</a
       >
       <div class="top-meta">
+        <span class="public-label">Ingen innlogging</span>
         <span id="profile-name">Prøv uten profil</span
         ><button class="header-button" data-view="profile">
           Min matprofil
@@ -74,6 +75,7 @@
         <button class="flow-tab" data-view="cookbook">
           Kokeboka <b id="saved-count-badge">0</b>
         </button>
+        <button class="flow-tab" data-view="pantry">Har hjemme</button>
         <button class="flow-tab" data-view="profile">Matprofil</button>
       </nav>
       <section
@@ -115,17 +117,41 @@
               <option>8</option>
             </select></label
           ><label
-            ><span>Maks butikker</span
+            ><span>Maks tilbudsbutikker</span
             ><select id="max-stores">
               <option value="1">1 butikk</option>
               <option value="2" selected>2 butikker</option>
               <option value="3">3 butikker</option>
-              <option value="8">Alle</option>
+              <option value="8">Inntil 8 butikker</option>
             </select></label
           ><button id="generate-plan" class="primary-button">
             Lag ny kombinasjon
           </button>
         </div>
+        <div class="planning-options">
+          <label
+            >Handlebudsjett for planen (kr)<input
+              id="budget-input"
+              type="number"
+              min="0"
+              max="10000"
+              step="10"
+              placeholder="Valgfritt"
+          /></label>
+          <label
+            >Maks tid per middag<select id="max-time">
+              <option value="0">Ingen grense</option>
+              <option value="20">20 minutter</option>
+              <option value="30">30 minutter</option>
+              <option value="45">45 minutter</option>
+              <option value="60">60 minutter</option>
+            </select></label
+          >
+          <button class="secondary-button" data-view="pantry">
+            Bruk det jeg har hjemme
+          </button>
+        </div>
+        <p id="budget-status" class="notice" hidden></p>
         <div id="plan-summary" class="plan-summary"></div>
         <div id="plan-empty" class="empty-state">
           <h3>Begynn med det du liker</h3>
@@ -157,6 +183,66 @@
             Oppdater tilbud
           </button>
         </div>
+        <details class="entry-panel">
+          <summary>Legg til et tilbud fra din butikk</summary>
+          <p>
+            Oppgi prisen for én pakning, datoene og riktig råvare. Tilbudet
+            lagres bare i din profil. For bønner og kikerter: oppgi avrent vekt.
+          </p>
+          <form id="offer-form" class="entry-form">
+            <label>Råvare<select id="offer-ingredient" required></select></label
+            ><label
+              >Varenavn<input
+                id="offer-name"
+                maxlength="150"
+                required
+                placeholder="F.eks. kyllingfilet 600 g"
+            /></label>
+            <label
+              >Butikk og sted<input
+                id="offer-store"
+                maxlength="80"
+                required
+                placeholder="F.eks. Kiwi Kråkerøy" /></label
+            ><label
+              >Pakningspris (kr)<input
+                id="offer-price"
+                type="number"
+                min="0.01"
+                max="10000"
+                step="0.01"
+                required
+            /></label>
+            <label
+              >Mengde per pakning <span id="offer-unit"></span
+              ><input
+                id="offer-quantity"
+                type="number"
+                min="0.1"
+                max="100000"
+                step="0.1"
+                required
+            /></label>
+            <label
+              >Fra og med<input id="offer-from" type="date" required /></label
+            ><label
+              >Til og med<input id="offer-until" type="date" required
+            /></label>
+            <label
+              >Kildelenke (valgfritt)<input
+                id="offer-source"
+                type="url"
+                maxlength="1000"
+                placeholder="https://…"
+            /></label>
+            <label class="check-line"
+              ><input id="offer-member" type="checkbox" />Dette er en
+              medlemspris jeg kan bruke</label
+            >
+            <button class="primary-button" type="submit">Lagre tilbud</button>
+            <p id="offer-error" class="error-text" role="status"></p>
+          </form>
+        </details>
         <div class="offer-layout">
           <aside class="filters">
             <label class="search-box"
@@ -207,8 +293,8 @@
             <p class="section-kicker">Før du går i butikken</p>
             <h2 id="list-heading">Én liste. Hele middagsuka.</h2>
             <p>
-              Samlede mengder for alle rettene. Kryss av det du allerede har
-              eller har handlet.
+              Samlede mengder minus råvarene på kjøkkenet ditt. Kryss av det du
+              har handlet.
             </p>
           </div>
           <button id="copy-list" class="secondary-button">Kopier liste</button>
@@ -220,6 +306,10 @@
           Salt, pepper og vann regnes som basis hjemme.
         </p>
         <div class="list-toolbar">
+          <button class="secondary-button" data-view="pantry">
+            Endre det jeg har hjemme
+          </button>
+          <button id="print-list" class="secondary-button">Skriv ut</button>
           <button id="clear-checked" class="text-button">
             Fjern avkryssinger
           </button>
@@ -240,6 +330,14 @@
             </p>
           </div>
         </div>
+        <div class="list-toolbar">
+          <button id="new-recipe" class="primary-button">
+            Legg til egen oppskrift</button
+          ><label class="check-line"
+            ><input type="checkbox" id="cook-tonight" />Vis retter jeg nesten
+            har alt til</label
+          >
+        </div>
         <div class="book-filters">
           <label
             >Søk etter rett eller råvare<input
@@ -252,6 +350,7 @@
               <option value="saved">Mine lagrede</option>
               <option value="rated">Mine vurderinger</option>
               <option value="favorites">Mine favoritter (4–5 stjerner)</option>
+              <option value="own">Egne oppskrifter</option>
             </select></label
           ><label
             >Kategori<select id="recipe-category">
@@ -311,8 +410,8 @@
             </div>
             <p id="link-help" class="small-note">
               Del app-lenken for at vennen skal lage sin egen profil. Den
-              personlige lenken er bare for deg. Nettstedets delingstilgang
-              gjelder i tillegg.
+              personlige lenken er bare for deg. Appen er åpen uten
+              ChatGPT-innlogging.
             </p>
           </div>
           <div class="profile-panel">
@@ -345,9 +444,42 @@
           </div>
         </div>
       </section>
+      <section class="view" id="pantry-view" aria-labelledby="pantry-heading">
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Før du kjøper mer</p>
+            <h2 id="pantry-heading">Dette har jeg hjemme</h2>
+            <p>
+              Mengdene trekkes fra handlebehovet og påvirker middagsforslagene.
+              Beholdningen oppdateres når du endrer den her, ikke automatisk når
+              du lager mat.
+            </p>
+          </div>
+          <button class="primary-button" id="pantry-plan">
+            Lag forslag fra kjøkkenet
+          </button>
+        </div>
+        <form id="pantry-form" class="entry-form">
+          <label>Råvare<select id="pantry-ingredient"></select></label
+          ><label
+            >Mengde du har <span id="pantry-unit"></span
+            ><input
+              id="pantry-quantity"
+              type="number"
+              min="0"
+              max="1000000"
+              step="0.1"
+              required /></label
+          ><button class="secondary-button">Lagre mengde</button>
+        </form>
+        <div id="pantry-list" class="pantry-list"></div>
+        <button class="secondary-button" id="cook-tonight-button">
+          Hva kan jeg lage av dette?
+        </button>
+      </section>
       <footer class="app-footer">
-        Tilbudsplan · Smak først, færre bomkjøp.<br />Oppskriftene er faste
-        matforslag. Tilbudsgrunnlaget avgjør hvilke som prioriteres, ikke en
+        Tilbudsplan · Smak først, færre bomkjøp.<br />Oppskriftene og
+        matprofilen styrer forslagene. Tilbudene påvirker prioriteringen, uten
         garanti for laveste pris.
       </footer>
     </main>
@@ -362,5 +494,73 @@
       <div id="recipe-detail"></div>
     </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <dialog id="editor-dialog" aria-labelledby="editor-title">
+      <button
+        class="dialog-close"
+        id="close-editor"
+        aria-label="Lukk oppskriftskjema"
+      >
+        ×
+      </button>
+      <h2 id="editor-title">Din egen oppskrift</h2>
+      <form id="recipe-form">
+        <input type="hidden" id="recipe-edit-id" />
+        <div class="entry-form">
+          <label>Navn<input id="custom-title" maxlength="100" required /></label
+          ><label
+            >Tid i minutter<input
+              id="custom-time"
+              type="number"
+              min="1"
+              max="360"
+              required
+              value="30"
+          /></label>
+        </div>
+        <p>
+          Legg inn mengdene for <strong>to porsjoner</strong>. Velg råvarer fra
+          listen, slik at handleliste og tilbud kan beregnes.
+        </p>
+        <div id="custom-ingredients"></div>
+        <button type="button" id="add-ingredient" class="secondary-button">
+          Legg til råvare
+        </button>
+        <label class="stack-label"
+          >Fremgangsmåte, ett trinn per linje<textarea
+            id="custom-steps"
+            rows="6"
+            maxlength="16000"
+            required
+          ></textarea>
+        </label>
+        <p class="small-note">
+          Mengdene i råvarelisten skaleres med porsjonene. Skriv gjerne «tilsett
+          risen» i trinnene, så unngår du mengder i teksten som må endres
+          senere.
+        </p>
+        <label class="stack-label"
+          >Ditt smaksgrep (valgfritt)<input id="custom-tip" maxlength="500"
+        /></label>
+        <div id="custom-tags" class="choice-grid"></div>
+        <p id="recipe-error" class="error-text" role="status"></p>
+        <button class="primary-button">Lagre oppskriften</button>
+      </form>
+    </dialog>
+    <dialog id="copy-dialog" aria-labelledby="copy-title">
+      <button id="close-copy" class="dialog-close" aria-label="Lukk kopiering">
+        ×
+      </button>
+      <h2 id="copy-title">Kopier teksten</h2>
+      <p>
+        Automatisk kopiering var ikke tilgjengelig. Marker teksten og velg
+        kopier.
+      </p>
+      <textarea
+        id="copy-text"
+        rows="8"
+        readonly
+        aria-label="Tekst å kopiere"
+      ></textarea>
+    </dialog>
   </body>
 </html>

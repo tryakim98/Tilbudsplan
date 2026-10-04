@@ -4,6 +4,7 @@ const files = {
   "app.js": "text/javascript; charset=utf-8",
   "recipes.js": "text/javascript; charset=utf-8",
   "engine.js": "text/javascript; charset=utf-8",
+  "model.js": "text/javascript; charset=utf-8",
   "styles.css": "text/css; charset=utf-8",
   "latest-data.json": "application/json",
   "assets/ukesmat.webp": "image/webp",
@@ -24,8 +25,13 @@ writeFileSync(
   "const ASSETS=" +
     JSON.stringify(assets) +
     ";\n" +
-    readFileSync("worker/index.js", "utf8"),
+    readFileSync("worker/index.js", "utf8").replace(
+      "../dist/model.js",
+      "./model.js",
+    ),
 );
+for (const file of ["model.js", "recipes.js"])
+  writeFileSync("dist/server/" + file, readFileSync("dist/" + file));
 writeFileSync(
   "dist/.openai/hosting.json",
   readFileSync(".openai/hosting.json"),

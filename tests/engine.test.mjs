@@ -12,7 +12,18 @@ import {
   makePlan,
   basket,
   recipeScore,
+  basketTotal,
+  availableOffers,
+  offerActive,
+  reconcileChecks,
 } from "../dist/engine.js";
+import {
+  localDate,
+  withDefaults,
+  validateProfile,
+  validCustomRecipe,
+  validManualOffer,
+} from "../dist/model.js";
 test("every recipe has complete ingredients and steps", () => {
   assert.equal(new Set(RECIPES.map((r) => r.id)).size, RECIPES.length);
   for (const r of RECIPES) {
@@ -115,4 +126,164 @@ test("store restrictions and stale data honored in cost calculation", () => {
     basket(p, offers, true).find((i) => i.id === "chicken").offer,
     null,
   );
+});
+
+const manual = (extra = {}) => ({
+  id: "manual-12345678",
+  ingredient: "chicken",
+  name: "Kyllingfilet",
+  store: "Min butikk",
+  price: 30,
+  quantity: 400,
+  validFrom: localDate(),
+  validUntil: localDate(),
+  member: false,
+  sourceUrl: "",
+  ...extra,
+});
+test("pantry is deducted once across the entire plan, with unchanged checks preserved", () => {
+  const p = {
+    ...emptyProfile(),
+    plan: ["sticky-chicken", "crispy-wraps"],
+    pantry: { chicken: 350 },
+    checked: ["chicken", "oil"],
+  };
+  const before = basket(p, [], true),
+    chicken = before.find((i) => i.id === "chicken");
+  assert.equal(chicken.quantity, 700);
+  assert.equal(chicken.need, 350);
+  assert.equal(chicken.packs, 1);
+  assert.equal(chicken.cost, 90);
+  assert.equal(
+    basketTotal(p, [], true),
+    basketTotal({ ...p, checked: [] }, [], true),
+  );
+  p.pantry.chicken = 700;
+  const after = basket(p, [], true),
+    owned = after.find((i) => i.id === "chicken");
+  assert.equal(owned.need, 0);
+  assert.equal(owned.cost, 0);
+  assert.equal(owned.packs, 0);
+  assert.deepEqual(reconcileChecks(p, before, after), ["oil"]);
+});
+test("own offers work with stale source data, with date and membership checks", () => {
+  const p = {
+    ...emptyProfile(),
+    plan: ["sticky-chicken"],
+    manualOffers: [manual()],
+  };
+  assert.equal(basket(p, [], true).find((i) => i.id === "chicken").cost, 30);
+  assert.equal(
+    offerActive({ ...manual(), manual: true }, true, localDate()),
+    true,
+  );
+  assert.equal(
+    offerActive({ ...manual(), manual: true }, true, "2000-01-01"),
+    false,
+  );
+  assert.equal(
+    offerActive({ ...manual(), manual: true }, true, "2099-01-01"),
+    false,
+  );
+  const raw = cleanOffers([
+    {
+      name: "Kyllingfilet",
+      mengde: "400 g",
+      price: "1",
+      store: "A",
+      valid_until: "2000-01-01",
+    },
+  ]);
+  assert.equal(availableOffers(raw, emptyProfile(), false).length, 0);
+  assert.equal(offerActive({ merknad: "Kun Trumf-medlemmer" }, false), false);
+  assert.equal(localDate(new Date("2026-10-04T22:30:00Z")), "2026-10-05");
+});
+test("store choice compares total packages rather than number of offers", () => {
+  const p = { ...emptyProfile(), plan: ["sticky-chicken"], maxStores: 1 };
+  const offers = cleanOffers([
+    { name: "Kyllingfilet", mengde: "400 g", price: "80", store: "A" },
+    { name: "Kyllingfilet", mengde: "600 g", price: "90", store: "A" },
+    { name: "Kyllingfilet", mengde: "400 g", price: "10", store: "B" },
+  ]);
+  assert.equal(
+    basket(p, offers, false).find((i) => i.id === "chicken").offer.store_label,
+    "B",
+  );
+  assert.equal(packageSize({ mengde: "600 g, kilopris 99" }, "g"), 600);
+});
+test("budget search lowers complete shopping cost and preserves locked meals", () => {
+  const p = { ...emptyProfile(), days: 5 };
+  const baseline = makePlan(p, [], true, 2);
+  const before = basketTotal({ ...p, plan: baseline }, [], true);
+  p.budget = 1;
+  p.plan = baseline;
+  p.locked = [0];
+  const after = makePlan(p, [], true, 2);
+  assert.equal(after[0], baseline[0]);
+  assert.equal(after.length, 5);
+  assert.ok(basketTotal({ ...p, plan: after }, [], true) < before);
+  assert.ok(basketTotal({ ...p, plan: after }, [], true) > p.budget);
+});
+test("maximum time is a hard limit, even for a previously locked dinner", () => {
+  const p = {
+    ...emptyProfile(),
+    days: 7,
+    maxTime: 20,
+    plan: [RECIPES.find((r) => r.time > 20).id],
+    locked: [0],
+  };
+  const plan = makePlan(p, [], true, 3);
+  assert.ok(plan.length > 0);
+  assert.ok(plan.every((id) => RECIPES.find((r) => r.id === id).time <= 20));
+});
+test("custom recipes participate in planning, portions and durable validation", () => {
+  const r = {
+    id: "custom-12345678",
+    title: "Min risrätt",
+    time: 15,
+    tip: "",
+    tags: ["cheap", "vegetarian"],
+    ingredients: [["rice", 200]],
+    steps: ["Kok risen."],
+  };
+  const p = {
+    ...emptyProfile(),
+    customRecipes: [r],
+    plan: [r.id],
+    servings: 4,
+    days: 1,
+    locked: [0],
+  };
+  assert.ok(validCustomRecipe(r));
+  assert.ok(validateProfile(p));
+  assert.deepEqual(makePlan(p, [], true), [r.id]);
+  assert.equal(basket(p, [], true).find((i) => i.id === "rice").quantity, 400);
+  assert.equal(validCustomRecipe({ ...r, ingredients: [["rice", -1]] }), false);
+  assert.equal(
+    validCustomRecipe({
+      ...r,
+      ingredients: [
+        ["rice", 1],
+        ["rice", 2],
+      ],
+    }),
+    false,
+  );
+  assert.equal(validManualOffer(manual({ validUntil: "2026-02-30" })), false);
+  assert.equal(
+    validManualOffer(manual({ sourceUrl: "javascript:alert(1)" })),
+    false,
+  );
+  const old = emptyProfile();
+  for (const key of [
+    "customRecipes",
+    "manualOffers",
+    "pantry",
+    "budget",
+    "maxTime",
+    "locked",
+  ])
+    delete old[key];
+  assert.ok(validateProfile(old));
+  assert.deepEqual(withDefaults(old).pantry, {});
 });
