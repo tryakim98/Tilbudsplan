@@ -1,196 +1,366 @@
 <!doctype html>
 <html lang="nb">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Lag en praktisk middagsplan fra ukens beste dagligvaretilbud." />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="Din egen kokebok og middagsplan – med smakspreferanser, tilbud og én samlet handleliste."
+    />
     <meta name="theme-color" content="#0b302f" />
-    <title>Tilbudsplan</title>
-    <link rel="preload" href="assets/ukesmat.webp" as="image" type="image/webp" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Tilbudsplan · Din middagsuke</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b302f'/%3E%3Ctext x='16' y='24' text-anchor='middle' fill='%23d8ef8b' font-family='Georgia' font-size='25'%3ET%3C/text%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="app.js"></script>
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="#tilbud" aria-label="Tilbudsplan – gå til tilbud">
-        <span class="brand-mark" aria-hidden="true">T</span>
-        <span>Tilbudsplan</span>
-      </a>
-      <div class="top-meta" aria-live="polite">
-        <span id="week-label">Uke –</span>
-        <span class="status-dot" aria-hidden="true"></span>
-        <span id="data-status">Henter tilbud …</span>
+      <a class="brand" href="#" aria-label="Tilbudsplan"
+        ><span class="brand-mark">T</span>Tilbudsplan</a
+      >
+      <div class="top-meta">
+        <span id="profile-name">Prøv uten profil</span
+        ><button class="header-button" data-view="profile">
+          Min matprofil
+        </button>
       </div>
     </header>
-
     <main>
-      <section class="hero" aria-labelledby="hero-title">
-        <img src="assets/ukesmat.webp" alt="Smaksrike hverdagsretter med kylling, laks, grønnsaker og bønner på et kjøkkenbord" />
-        <div class="hero-shade"></div>
-        <div class="hero-copy">
-          <p class="eyebrow">Tilbud → middag → én handleliste</p>
-          <h1 id="hero-title">God middag. Mindre butikkstyr.</h1>
-          <p>Velg kuppene du faktisk vil bruke. Resten ordner planen.</p>
-          <div class="hero-stats" aria-label="Datastatus">
-            <span><strong id="offer-count">–</strong> tilbud</span>
-            <span><strong id="store-count">–</strong> butikker</span>
-            <span><strong id="quality-score">–</strong> datakvalitet</span>
+      <section class="intro">
+        <div>
+          <p class="section-kicker">Din middagsuke</p>
+          <h1>Mat du gleder deg til.</h1>
+          <p>Tilbud som passer smaken din. Oppskrifter du vil lage igjen.</p>
+          <div class="intro-actions">
+            <button class="primary-button" id="quick-plan">Planlegg uka</button
+            ><button class="text-button" data-view="cookbook">
+              Finn en ny favoritt
+            </button>
           </div>
         </div>
+        <img
+          src="assets/ukesmat.webp"
+          alt="Hverdagsmat med grønnsaker, kylling og fisk på et kjøkkenbord"
+          width="400"
+          height="200"
+        />
       </section>
-
-      <nav class="flow-tabs" aria-label="Tilbudsplanens steg">
-        <button class="flow-tab is-active" type="button" data-view="offers" aria-current="step">
-          <span>1</span> Velg tilbud <b id="selected-count-badge">0</b>
+      <div class="profile-strip">
+        <span id="save-status" role="status"
+          >Opprett en enkel profil for å lagre kokebok og preferanser.</span
+        ><button id="retry-save" class="text-button" hidden>
+          Prøv lagring igjen</button
+        ><button id="create-shortcut" class="text-button" data-view="profile">
+          Opprett profil
         </button>
-        <button class="flow-tab" type="button" data-view="plan">
-          <span>2</span> Ukeplan <b id="plan-count-badge">0</b>
+      </div>
+      <div id="data-warning" class="notice" role="status">
+        Henter tilbudsgrunnlag …
+      </div>
+      <nav class="flow-tabs" aria-label="Hovedmeny">
+        <button class="flow-tab is-active" data-view="plan" aria-current="page">
+          Ukeplan <b id="plan-count-badge">0</b>
         </button>
-        <button class="flow-tab" type="button" data-view="list">
-          <span>3</span> Handleliste <b id="list-count-badge">0</b>
+        <button class="flow-tab" data-view="offers">
+          Tilbud <b id="selected-count-badge">0</b>
         </button>
+        <button class="flow-tab" data-view="list">
+          Handleliste <b id="list-count-badge">0</b>
+        </button>
+        <button class="flow-tab" data-view="cookbook">
+          Kokeboka <b id="saved-count-badge">0</b>
+        </button>
+        <button class="flow-tab" data-view="profile">Matprofil</button>
       </nav>
-
-      <section id="offers-view" class="view is-active" aria-labelledby="offers-heading">
+      <section
+        class="view is-active"
+        id="plan-view"
+        aria-labelledby="plan-heading"
+      >
         <div class="view-heading">
           <div>
-            <p class="section-kicker">Steg 1</p>
-            <h2 id="offers-heading">Hva frister denne uka?</h2>
-            <p>Velg råvarer du vil bygge uka rundt. Marker «ikke bruk» på tilbud du vil slippe.</p>
+            <p class="section-kicker">Hva skal vi ha til middag?</p>
+            <h2 id="plan-heading">En uke som passer deg</h2>
+            <p id="plan-context">
+              Velg antall middager og porsjoner. Matprofilen din styrer
+              forslagene.
+            </p>
           </div>
-          <button id="clear-choices" class="text-button" type="button">Nullstill valg</button>
         </div>
-
+        <div class="plan-controls">
+          <label
+            ><span>Middager</span
+            ><select id="meal-count">
+              <option>1</option>
+              <option>2</option>
+              <option>3</option>
+              <option>4</option>
+              <option selected>5</option>
+              <option>6</option>
+              <option>7</option>
+            </select></label
+          ><label
+            ><span>Porsjoner</span
+            ><select id="servings">
+              <option>1</option>
+              <option selected>2</option>
+              <option>3</option>
+              <option>4</option>
+              <option>5</option>
+              <option>6</option>
+              <option>8</option>
+            </select></label
+          ><label
+            ><span>Maks butikker</span
+            ><select id="max-stores">
+              <option value="1">1 butikk</option>
+              <option value="2" selected>2 butikker</option>
+              <option value="3">3 butikker</option>
+              <option value="8">Alle</option>
+            </select></label
+          ><button id="generate-plan" class="primary-button">
+            Lag ny kombinasjon
+          </button>
+        </div>
+        <div id="plan-summary" class="plan-summary"></div>
+        <div id="plan-empty" class="empty-state">
+          <h3>Begynn med det du liker</h3>
+          <p>
+            Lag et forslag med én gang, eller velg preferanser i matprofilen
+            først.
+          </p>
+          <button class="primary-button" id="first-plan">
+            Lag middagsforslag
+          </button>
+        </div>
+        <div id="meal-plan" class="meal-plan"></div>
+        <div class="plan-actions">
+          <button class="secondary-button" data-view="profile">
+            Tilpass smaken</button
+          ><button class="primary-button" data-view="list">
+            Se handlelisten
+          </button>
+        </div>
+      </section>
+      <section class="view" id="offers-view" aria-labelledby="offers-heading">
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Råvarene først</p>
+            <h2 id="offers-heading">Tilbud som kan bli middag</h2>
+            <p id="source-updated"></p>
+          </div>
+          <button id="refresh-data" class="secondary-button">
+            Oppdater tilbud
+          </button>
+        </div>
         <div class="offer-layout">
-          <aside class="filters" aria-label="Filtrer tilbud">
-            <label class="search-box">
-              <span>Søk</span>
-              <input id="offer-search" type="search" placeholder="Kylling, ost, Kiwi …" autocomplete="off" />
-            </label>
-
+          <aside class="filters">
+            <label class="search-box"
+              ><span>Søk i tilbud</span
+              ><input
+                id="offer-search"
+                type="search"
+                placeholder="Kylling, brokkoli …"
+            /></label>
             <fieldset>
-              <legend>Butikk</legend>
+              <legend>Butikker i planen</legend>
+              <p class="small-note">
+                Ingen avkrysset betyr alle. Kontroller at tilbudet gjelder din
+                lokale butikk.
+              </p>
               <div id="store-filters" class="filter-list"></div>
             </fieldset>
-
-            <fieldset>
-              <legend>Varetype</legend>
-              <div id="category-filters" class="filter-list"></div>
-            </fieldset>
-
-            <label class="switch-row">
-              <input id="deals-only" type="checkbox" checked />
-              <span>Vis reelle kupp først</span>
-            </label>
-
             <div class="source-note">
-              <strong>Datagrunnlag</strong>
-              <p id="source-updated">Oppdateres ukentlig fra eTilbudsavis-data.</p>
-              <a href="https://github.com/Olewol/tilbudsavis" target="_blank" rel="noreferrer">Se åpen kilde ↗</a>
+              <strong>Om prisene</strong>
+              <p>
+                Data fra Olewol/tilbudsavis, basert på eTilbudsavis.
+                Tilgjengelighet og lokal gyldighet er ikke verifisert.
+              </p>
+              <a
+                href="https://etilbudsavis.no/"
+                target="_blank"
+                rel="noreferrer"
+                >Sjekk kundeavisen</a
+              >
             </div>
           </aside>
-
-          <div class="offers-main">
+          <div>
             <div class="offers-toolbar">
-              <p id="result-count" aria-live="polite">Laster tilbud …</p>
+              <p id="result-count"></p>
               <select id="sort-offers" aria-label="Sorter tilbud">
-                <option value="best">Beste kupp</option>
-                <option value="price">Laveste pris</option>
+                <option value="name">Varenavn</option>
+                <option value="price">Pris</option>
                 <option value="store">Butikk</option>
               </select>
             </div>
-            <div id="offers-grid" class="offers-grid" aria-live="polite"></div>
-            <div id="empty-offers" class="empty-state" hidden>
-              <h3>Ingen tilbud passer filteret</h3>
-              <p>Prøv flere butikker eller fjern søkeordet.</p>
-            </div>
+            <div id="offers-grid" class="offers-grid"></div>
           </div>
-        </div>
-
-        <div class="sticky-action">
-          <div>
-            <strong id="sticky-selection">0 tilbud valgt</strong>
-            <span id="sticky-hint">Velg gjerne 3–8 tilbud</span>
-          </div>
-          <button id="go-to-plan" class="primary-button" type="button">Lag ukeplan <span aria-hidden="true">→</span></button>
         </div>
       </section>
-
-      <section id="plan-view" class="view" aria-labelledby="plan-heading">
+      <section class="view" id="list-view" aria-labelledby="list-heading">
         <div class="view-heading">
           <div>
-            <p class="section-kicker">Steg 2</p>
-            <h2 id="plan-heading">Middager bygget på valgene dine</h2>
-            <p>Smaksrik først, men med gjenbruk av råvarer og færrest mulig butikkturer.</p>
+            <p class="section-kicker">Før du går i butikken</p>
+            <h2 id="list-heading">Én liste. Hele middagsuka.</h2>
+            <p>
+              Samlede mengder for alle rettene. Kryss av det du allerede har
+              eller har handlet.
+            </p>
           </div>
-          <button id="back-to-offers" class="text-button" type="button">← Endre tilbud</button>
+          <button id="copy-list" class="secondary-button">Kopier liste</button>
         </div>
-
-        <div class="plan-controls">
-          <label>
-            <span>Antall middager</span>
-            <select id="meal-count">
-              <option value="3">3 middager</option>
-              <option value="4">4 middager</option>
-              <option value="5" selected>5 middager</option>
-              <option value="6">6 middager</option>
-              <option value="7">7 middager</option>
-            </select>
-          </label>
-          <label>
-            <span>Porsjoner</span>
-            <select id="servings">
-              <option value="2">2 personer</option>
-              <option value="4" selected>4 personer</option>
-              <option value="6">6 personer</option>
-            </select>
-          </label>
-          <label>
-            <span>Maks butikker</span>
-            <select id="max-stores">
-              <option value="1">1 butikk</option>
-              <option value="2">2 butikker</option>
-              <option value="3" selected>3 butikker</option>
-              <option value="8">Alle butikker</option>
-            </select>
-          </label>
-          <button id="generate-plan" class="primary-button" type="button">Lag ny kombinasjon</button>
-        </div>
-
-        <div id="plan-summary" class="plan-summary" hidden></div>
-        <div id="meal-plan" class="meal-plan"></div>
-        <div id="plan-empty" class="empty-state">
-          <h3>Ukeplanen venter på tilbudene dine</h3>
-          <p>Velg noen råvarer først, eller la oss finne de beste kuppene automatisk.</p>
-          <button id="auto-plan" class="primary-button" type="button">Bruk ukens beste</button>
-        </div>
-
-        <div class="plan-actions">
-          <button id="regenerate-bottom" class="secondary-button" type="button">Bland middager</button>
-          <button id="go-to-list" class="primary-button" type="button">Lag handleliste <span aria-hidden="true">→</span></button>
-        </div>
-      </section>
-
-      <section id="list-view" class="view" aria-labelledby="list-heading">
-        <div class="view-heading">
-          <div>
-            <p class="section-kicker">Steg 3</p>
-            <h2 id="list-heading">Alt samlet. Sortert for butikken.</h2>
-            <p>Tilbudsvarer står med butikk og pris. Basisvarer kan du krysse av hjemmefra.</p>
-          </div>
-          <button id="back-to-plan" class="text-button" type="button">← Til ukeplan</button>
-        </div>
-
         <div id="shopping-overview" class="shopping-overview"></div>
+        <p class="small-note">
+          Handleanslaget regner hele pakninger, også olje og krydder. Prisene
+          uten tilbud er illustrerende anslag, ikke kontrollerte butikkpriser.
+          Salt, pepper og vann regnes som basis hjemme.
+        </p>
         <div class="list-toolbar">
-          <button id="check-pantry" class="secondary-button" type="button">Kryss av basisvarer</button>
-          <button id="copy-list" class="secondary-button" type="button">Kopier liste</button>
-          <button id="clear-checked" class="text-button" type="button">Fjern avkryssinger</button>
+          <button id="clear-checked" class="text-button">
+            Fjern avkryssinger
+          </button>
         </div>
-        <div id="shopping-list" class="shopping-list"></div>
+        <div id="shopping-list"></div>
       </section>
+      <section
+        class="view"
+        id="cookbook-view"
+        aria-labelledby="cookbook-heading"
+      >
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Ta vare på de gode middagene</p>
+            <h2 id="cookbook-heading">Kokeboka di</h2>
+            <p>
+              Lagre retter, gi stjerner og skriv ned dine egne små smaksgrep.
+            </p>
+          </div>
+        </div>
+        <div class="book-filters">
+          <label
+            >Søk etter rett eller råvare<input
+              id="recipe-search"
+              type="search"
+              placeholder="Linser, pasta, kylling …" /></label
+          ><label
+            >Vis<select id="book-mode">
+              <option value="all">Alle oppskrifter</option>
+              <option value="saved">Mine lagrede</option>
+              <option value="rated">Mine vurderinger</option>
+              <option value="favorites">Mine favoritter (4–5 stjerner)</option>
+            </select></label
+          ><label
+            >Kategori<select id="recipe-category">
+              <option value="">Alle kategorier</option>
+            </select></label
+          >
+        </div>
+        <p id="book-count" class="small-note"></p>
+        <div id="recipe-grid" class="recipe-grid"></div>
+      </section>
+      <section class="view" id="profile-view" aria-labelledby="profile-heading">
+        <div class="view-heading">
+          <div>
+            <p class="section-kicker">Uformelt og personlig</p>
+            <h2 id="profile-heading">Din smak, din kokebok</h2>
+            <p>
+              Ingen e-post eller passord. En personlig lenke gir tilgang til
+              kokeboka på en annen enhet.
+            </p>
+          </div>
+        </div>
+        <div class="profile-layout">
+          <div class="profile-panel">
+            <form id="name-form">
+              <label for="name-input">Hva skal profilen hete?</label>
+              <div class="inline-form">
+                <input
+                  id="name-input"
+                  maxlength="60"
+                  required
+                  placeholder="F.eks. Tryms kjøkken"
+                /><button id="name-submit" class="primary-button">
+                  Opprett profil
+                </button>
+              </div>
+            </form>
+            <p class="small-note">
+              Alle med din personlige lenke kan lese og endre profilen. Ikke
+              bruk den til sensitive opplysninger.
+            </p>
+            <div class="profile-actions">
+              <button id="personal-link" class="secondary-button">
+                Kopier min personlige lenke</button
+              ><button id="friend-link" class="secondary-button">
+                Del appen med en venn</button
+              ><button id="export-profile" class="text-button">
+                Last ned kokeboka</button
+              ><label class="text-button file-label"
+                >Importer sikkerhetskopi<input
+                  id="import-profile"
+                  type="file"
+                  accept="application/json,.json"
+                  hidden /></label
+              ><button id="new-profile" class="text-button">
+                Bytt til en ny profil
+              </button>
+            </div>
+            <p id="link-help" class="small-note">
+              Del app-lenken for at vennen skal lage sin egen profil. Den
+              personlige lenken er bare for deg. Nettstedets delingstilgang
+              gjelder i tillegg.
+            </p>
+          </div>
+          <div class="profile-panel">
+            <h3>Hva vil du prioritere?</h3>
+            <div id="goal-options" class="choice-grid"></div>
+            <p class="small-note">
+              Kjapt = inntil 30 minutter. Billig = rimelige råvarer. Næringsrikt
+              = retter med belgvekster, egg, fisk eller kjøtt og flere
+              råvaregrupper. Sunt = grønnsaksrikt. Lettere/slankende = retter
+              med mye grønnsaker og mindre fet saus; ingen beregnede kalorier
+              eller garanti for vektnedgang. Vegetar er et fast filter, de andre
+              er prioriteringer.
+            </p>
+          </div>
+          <div class="profile-panel wide">
+            <h3>Råvarer du liker — og helst slipper</h3>
+            <p>
+              «Liker ikke» utelukker oppskrifter med råvaren. Favoritter får et
+              lite forsprang. Dette er ikke et allergifilter; kontroller
+              ingredienser og pakninger selv.
+            </p>
+            <label class="search-box"
+              ><span>Finn råvare</span
+              ><input
+                id="ingredient-search"
+                type="search"
+                placeholder="Sopp, fisk, løk …"
+            /></label>
+            <div id="ingredient-options" class="ingredient-grid"></div>
+          </div>
+        </div>
+      </section>
+      <footer class="app-footer">
+        Tilbudsplan · Smak først, færre bomkjøp.<br />Oppskriftene er faste
+        matforslag. Tilbudsgrunnlaget avgjør hvilke som prioriteres, ikke en
+        garanti for laveste pris.
+      </footer>
     </main>
-
+    <dialog id="recipe-dialog" aria-labelledby="recipe-title">
+      <button
+        id="close-recipe"
+        class="dialog-close"
+        aria-label="Lukk oppskrift"
+      >
+        ×
+      </button>
+      <div id="recipe-detail"></div>
+    </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="app.js" defer></script>
   </body>
 </html>
