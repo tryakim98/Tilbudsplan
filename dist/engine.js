@@ -1,6 +1,6 @@
 import { INGREDIENTS } from "./recipes.js";
 import { catalog, emptyProfile, withDefaults, localDate } from "./model.js";
-import { chainInfo, priceBasis, packInfo } from "./offers.js";
+import { chainInfo, priceBasis, packInfo, comparison } from "./offers.js";
 export { emptyProfile, withDefaults, catalog };
 export const normalize = (s = "") =>
   String(s)
@@ -33,7 +33,7 @@ export function packageSize(o, unit) {
   if (pack?.unit === unit) return pack.quantity;
   // A stated pack count is usable even when the source also supplies egg weight.
   if (unit === "stk") {
-    const m = String(o.name || "").match(
+    const m = String((o.name || "") + " " + (o.mengde || "")).match(
       /\b(\d+)\s*[- ]?\s*(?:stk|pk|pakning)\b/i,
     );
     if (m) return Number(m[1]);
@@ -50,6 +50,25 @@ export function ingredientOffer(o, id) {
   )
     return false;
   if (["beans", "chickpeas"].includes(id)) return false;
+  if (
+    [
+      "potato",
+      "carrot",
+      "broccoli",
+      "cabbage",
+      "cauliflower",
+      "spinach",
+      "mushroom",
+    ].includes(id) &&
+    /chips|grateng|mos|suppe|salat|blanding|pasta|pizza|ferdigrett/.test(text)
+  )
+    return false;
+  if (
+    id === "pasta" &&
+    /fersk|fylt|saus|ferdig|grateng|lasagne|salat/.test(text)
+  )
+    return false;
+  if (id === "wraps" && /chips|taco kit/.test(text)) return false;
   if (id === "honey" && /melon|kylling|sennep|glasur/.test(text)) return false;
   if (
     id === "chicken" &&
@@ -75,9 +94,12 @@ export function cleanOffers(products = []) {
     o.source_store_label = o.store_label || o.store || "";
     o.store_key = chain.key;
     o.store_label = chain.label;
-    o.id = normalize([o.store_key, o.name, o.mengde, o.price].join(" "));
+    o.id =
+      raw.structured && typeof raw.id === "string"
+        ? raw.id
+        : normalize([o.store_key, o.name, o.mengde, o.price].join(" "));
     o.matches = Object.keys(INGREDIENTS).filter((id) => ingredientOffer(o, id));
-    if (o.matches.length) map.set(o.id, o);
+    map.set(o.id, o);
   }
   return [...map.values()];
 }
@@ -100,6 +122,7 @@ export function offerActive(o, stale, today = localDate()) {
   if (!o.manual && stale) return false;
   const start = o.validFrom || o.valid_from;
   const end = o.validUntil || o.valid_until;
+  if (o.structured && (!start || !end)) return false;
   if (
     (start && today < String(start).slice(0, 10)) ||
     (end && today > String(end).slice(0, 10))
@@ -107,7 +130,11 @@ export function offerActive(o, stale, today = localDate()) {
     return false;
   if (o.manual && (!start || !end)) return false;
   // Do not infer entitlement to membership discounts from a generic source.
-  if (!o.manual && /medlem|trumf|kundeklubb/i.test(o.merknad || ""))
+  if (
+    !o.manual &&
+    !o.structured &&
+    /medlem|trumf|kundeklubb/i.test(o.merknad || "")
+  )
     return false;
   return true;
 }
@@ -122,27 +149,56 @@ export function availableOffers(offers, p, stale) {
   return combinedOffers(offers, p).filter(
     (o) =>
       offerActive(o, stale, today) &&
+      o.matches.length > 0 &&
+      (o.accessKind !== "member" || p.memberChains?.includes(o.store_key)) &&
+      (o.accessKind !== "app" || p.appChains?.includes(o.store_key)) &&
       !p.excluded.includes(o.id) &&
       (!stores.length || stores.includes(o.store_key)) &&
       !o.matches.some((id) => p.dislikes.includes(id)),
   );
 }
-export function offerFor(id, quantity, pool) {
+const candidateCache = new WeakMap();
+export function offerFor(
+  id,
+  quantity,
+  pool,
+  mode = "offers",
+  maxCost = Infinity,
+) {
   if (quantity <= 0) return null;
+  if (!candidateCache.has(pool)) candidateCache.set(pool, new Map());
+  const cache = candidateCache.get(pool);
+  if (!cache.has(id))
+    cache.set(
+      id,
+      pool
+        .filter(
+          (o) =>
+            (o.matches ? o.matches.includes(id) : ingredientOffer(o, id)) &&
+            priceBasis(o).safe,
+        )
+        .map((o) => ({
+          offer: o,
+          size: packageSize(o, INGREDIENTS[id][1]),
+          price: price(o.price),
+          dealScore: Math.max(0, comparison(o).score),
+        }))
+        .filter((o) => o.size > 0 && o.price > 0),
+    );
   return (
-    pool
-      .filter((o) => ingredientOffer(o, id) && priceBasis(o).safe)
-      .map((o) => ({
-        offer: o,
-        size: packageSize(o, INGREDIENTS[id][1]),
-        price: price(o.price),
-      }))
-      .filter((o) => o.size > 0 && o.price > 0)
+    cache
+      .get(id)
       .map((o) => ({
         ...o,
         cost: Math.ceil((quantity - 1e-8) / o.size) * o.price,
       }))
-      .sort((a, b) => a.cost - b.cost)[0] || null
+      .filter((o) => o.cost <= maxCost + 0.001)
+      .sort(
+        (a, b) =>
+          (mode === "discounts" ? b.dealScore - a.dealScore : 0) ||
+          a.cost - b.cost ||
+          b.dealScore - a.dealScore,
+      )[0] || null
   );
 }
 export function storePool(offers, p) {
@@ -176,7 +232,7 @@ function itemsFor(p, totals, pool) {
     const [name, unit, defaultSize, estimate, group] = INGREDIENTS[id];
     const atHome = Math.min(quantity, p.pantry?.[id] || 0);
     const need = Math.max(0, quantity - atHome);
-    const match = offerFor(id, need, pool);
+    const match = offerFor(id, need, pool, p.planMode);
     const size = match?.size || defaultSize;
     const packs = Math.ceil((need - 1e-8) / size);
     const cost = need > 0 ? (match ? match.cost : packs * estimate) : 0;
@@ -204,74 +260,105 @@ export function basket(p, offers, stale) {
 }
 function basketWithPool(p, pool) {
   const totals = totalsFor(p);
+  const items = (selected) => budgetedItems(p, totals, selected);
+  const better = (candidate, prior) => {
+    if (!prior) return true;
+    if (["offers", "discounts"].includes(p.planMode)) {
+      const difference = coverage(candidate).percent - coverage(prior).percent;
+      if (Math.abs(difference) > 0.001) return difference > 0;
+    }
+    if (p.planMode === "discounts") {
+      const cost = candidate.reduce((n, i) => n + i.cost, 0),
+        old = prior.reduce((n, i) => n + i.cost, 0);
+      if (p.budget > 0 && cost <= p.budget !== old <= p.budget)
+        return cost <= p.budget;
+      const difference = dealQuality(candidate) - dealQuality(prior);
+      if (Math.abs(difference) > 0.001) return difference > 0;
+    }
+    const difference =
+      candidate.reduce((n, i) => n + i.cost, 0) -
+      prior.reduce((n, i) => n + i.cost, 0);
+    if (Math.abs(difference) > 0.01) return difference < 0;
+    return (
+      new Set(candidate.filter((i) => i.offer).map((i) => i.offer.store_key))
+        .size <
+      new Set(prior.filter((i) => i.offer).map((i) => i.offer.store_key)).size
+    );
+  };
   // Compare actual basket cost across store combinations, not offer counts.
   const keys = [...new Set(pool.map((o) => o.store_key))];
-  if (!p.maxStores || keys.length <= p.maxStores)
-    return itemsFor(p, totals, pool);
+  if (!p.maxStores || keys.length <= p.maxStores) return items(pool);
   if (keys.length > 8) {
     const chosen = [];
-    let best = itemsFor(p, totals, []);
-    let bestCost = Infinity;
-    let bestCoverage = -1;
+    let best = null;
     for (let round = 0; round < p.maxStores; round++) {
       let next = null;
       for (const key of keys.filter((k) => !chosen.includes(k))) {
-        const items = itemsFor(
-          p,
-          totals,
+        const candidate = items(
           pool.filter(
             (o) => chosen.includes(o.store_key) || o.store_key === key,
           ),
         );
-        const cost = items.reduce((n, i) => n + i.cost, 0);
-        const offered = coverage(items).percent;
-        if (
-          (p.planMode === "offers" && offered > bestCoverage + 0.001) ||
-          ((p.planMode !== "offers" ||
-            Math.abs(offered - bestCoverage) < 0.001) &&
-            cost < bestCost - 0.01)
-        ) {
+        if (better(candidate, best)) {
           next = key;
-          best = items;
-          bestCost = cost;
-          bestCoverage = offered;
+          best = candidate;
         }
       }
       if (!next) break;
       chosen.push(next);
     }
-    return best;
+    return best || items([]);
   }
   let best = null;
-  let bestCost = Infinity;
-  let bestCount = Infinity;
-  let bestCoverage = -1;
   for (let mask = 1; mask < 2 ** keys.length; mask++) {
     const chosen = keys.filter((_, i) => mask & (1 << i));
     if (chosen.length > p.maxStores) continue;
-    const items = itemsFor(
-      p,
-      totals,
-      pool.filter((o) => chosen.includes(o.store_key)),
-    );
-    const cost = items.reduce((n, i) => n + i.cost, 0);
-    const offered = coverage(items).percent;
-    const used = new Set(
-      items.filter((i) => i.offer).map((i) => i.offer.store_key),
-    ).size;
-    if (
-      (p.planMode === "offers" && offered > bestCoverage + 0.001) ||
-      ((p.planMode !== "offers" || Math.abs(offered - bestCoverage) < 0.001) &&
-        (cost < bestCost - 0.01 ||
-          (Math.abs(cost - bestCost) < 0.01 && used < bestCount)))
-    ) {
-      best = items;
-      bestCost = cost;
-      bestCount = used;
-      bestCoverage = offered;
-    }
+    const candidate = items(pool.filter((o) => chosen.includes(o.store_key)));
+    if (better(candidate, best)) best = candidate;
   }
-  return best || itemsFor(p, totals, []);
+  return best || items([]);
+}
+function budgetedItems(p, totals, pool) {
+  const preferred = itemsFor(p, totals, pool);
+  if (
+    p.planMode !== "discounts" ||
+    !p.budget ||
+    preferred.reduce((n, i) => n + i.cost, 0) <= p.budget
+  )
+    return preferred;
+  const cheapest = itemsFor({ ...p, planMode: "offers" }, totals, pool);
+  let total = cheapest.reduce((n, i) => n + i.cost, 0);
+  if (total > p.budget) return cheapest;
+  const order = cheapest
+    .map((i, index) => ({
+      index,
+      gain:
+        (preferred[index].offer
+          ? comparison(preferred[index].offer).score
+          : 0) - (i.offer ? comparison(i.offer).score : 0),
+    }))
+    .sort((a, b) => b.gain - a.gain);
+  for (const { index } of order) {
+    const item = cheapest[index],
+      match = offerFor(
+        item.id,
+        item.need,
+        pool,
+        "discounts",
+        item.cost + p.budget - total,
+      );
+    if (!match) continue;
+    total += match.cost - item.cost;
+    item.offer = match.offer;
+    item.size = match.size;
+    item.packs = Math.ceil((item.need - 1e-8) / match.size);
+    item.cost = match.cost;
+    item.leftover = Math.max(
+      0,
+      (p.pantry?.[item.id] || 0) + item.packs * item.size - item.quantity,
+    );
+  }
+  return cheapest;
 }
 export const basketTotal = (p, offers, stale) =>
   basket(p, offers, stale).reduce((n, i) => n + i.cost, 0);
@@ -295,10 +382,15 @@ export function recipeEstimate(r, servings = 2) {
 export function recipeScore(r, p, pool) {
   if (!eligible(r, p)) return -Infinity;
   const matches = r.ingredients.filter(([id]) =>
-    pool.some((o) => ingredientOffer(o, id)),
+    pool.some(
+      (o) =>
+        o.matches.includes(id) &&
+        priceBasis(o).safe &&
+        packageSize(o, INGREDIENTS[id][1]) > 0,
+    ),
   );
   const picked = r.ingredients.filter(([id]) =>
-    pool.some((o) => p.selected.includes(o.id) && ingredientOffer(o, id)),
+    pool.some((o) => p.selected.includes(o.id) && o.matches.includes(id)),
   ).length;
   const pantry = r.ingredients.reduce(
     (n, [id, q]) =>
@@ -309,9 +401,14 @@ export function recipeScore(r, p, pool) {
     ([id, n]) => (n * p.servings) / 2 > (p.pantry?.[id] || 0),
   );
   const offerShare =
-    p.planMode === "offers" && needs.length
+    ["offers", "discounts"].includes(p.planMode) && needs.length
       ? needs.filter(([id, n]) =>
-          offerFor(id, (n * p.servings) / 2 - (p.pantry?.[id] || 0), pool),
+          offerFor(
+            id,
+            (n * p.servings) / 2 - (p.pantry?.[id] || 0),
+            pool,
+            p.planMode,
+          ),
         ).length / needs.length
       : 0;
   return (
@@ -322,7 +419,20 @@ export function recipeScore(r, p, pool) {
     (p.saved.includes(r.id) ? 3 : 0) +
     ((p.ratings[r.id] || 3) - 3) * 4 +
     pantry * 2 +
-    offerShare * 200
+    offerShare * 200 +
+    (p.planMode === "discounts"
+      ? needs.reduce(
+          (n, [id, q]) =>
+            n +
+            (offerFor(
+              id,
+              (q * p.servings) / 2 - (p.pantry?.[id] || 0),
+              pool,
+              p.planMode,
+            )?.dealScore || 0),
+          0,
+        ) / Math.max(1, needs.length)
+      : 0)
   );
 }
 export function makePlan(p, offers, stale, variation = 0) {
@@ -386,7 +496,7 @@ export function makePlan(p, offers, stale, variation = 0) {
     return costs.get(key);
   };
   // Offer mode maximizes the share of grocery lines with usable offer prices.
-  if (p.planMode === "offers" && pool.length) {
+  if (["offers", "discounts"].includes(p.planMode) && pool.length) {
     for (let round = 0; round < 7; round++) {
       const current = coverage(basketFor(plan));
       let best = null;
@@ -403,18 +513,37 @@ export function makePlan(p, offers, stale, variation = 0) {
           trial[i] = r.id;
           const value = coverage(basketFor(trial)),
             cost = costFor(trial);
+          const quality = dealQuality(basketFor(trial)),
+            currentQuality = dealQuality(basketFor(plan));
+          if (
+            p.planMode === "discounts" &&
+            p.budget > 0 &&
+            costFor(plan) <= p.budget &&
+            cost > p.budget
+          )
+            continue;
+          const tiedCoverage =
+            Math.abs(value.percent - current.percent) < 0.001;
           const improves =
             value.percent > current.percent + 0.001 ||
-            (Math.abs(value.percent - current.percent) < 0.001 &&
-              cost < costFor(plan) - 0.01);
+            (tiedCoverage &&
+              ((p.planMode === "discounts" &&
+                quality > currentQuality + 0.001) ||
+                ((p.planMode !== "discounts" ||
+                  Math.abs(quality - currentQuality) < 0.001) &&
+                  cost < costFor(plan) - 0.01)));
           if (
             improves &&
             (!best ||
               value.percent > best.percent + 0.001 ||
               (Math.abs(value.percent - best.percent) < 0.001 &&
-                cost < best.cost - 0.01))
+                ((p.planMode === "discounts" &&
+                  quality > best.quality + 0.001) ||
+                  ((p.planMode !== "discounts" ||
+                    Math.abs(quality - best.quality) < 0.001) &&
+                    cost < best.cost - 0.01))))
           )
-            best = { plan: trial, percent: value.percent, cost };
+            best = { plan: trial, percent: value.percent, cost, quality };
         }
       }
       if (!best) break;
@@ -439,7 +568,7 @@ export function makePlan(p, offers, stale, variation = 0) {
           const trial = [...plan];
           trial[i] = r.id;
           if (
-            p.planMode === "offers" &&
+            ["offers", "discounts"].includes(p.planMode) &&
             coverage(basketFor(trial)).percent + 0.001 <
               coverage(basketFor(plan)).percent
           )
@@ -464,6 +593,29 @@ export function makePlan(p, offers, stale, variation = 0) {
     }
   }
   return plan;
+}
+export function dealQuality(items) {
+  const lines = items.filter((i) => i.need > 0);
+  return lines.length
+    ? lines.reduce(
+        (sum, i) =>
+          sum + (i.offer ? Math.max(0, comparison(i.offer).score) : 0),
+        0,
+      ) / lines.length
+    : 0;
+}
+export function advertisedBasketSaving(items) {
+  let savings = 0,
+    lines = 0;
+  for (const i of items) {
+    if (!i.offer || !i.need) continue;
+    const c = comparison(i.offer);
+    if (c.safe && c.before) {
+      savings += i.packs * (c.before - c.current);
+      lines++;
+    }
+  }
+  return { savings, lines };
 }
 export function reconcileChecks(p, before, after) {
   const prior = new Map(before.map((i) => [i.id, i]));

@@ -94,8 +94,78 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
       configurable: true,
     });
   globalThis.confirm = () => true;
-  globalThis.fetch = async (url, opts = {}) =>
-    String(url).includes("/api/profile")
+  const offersFixture = JSON.parse(
+    readFileSync(new URL("../dist/latest-data.json", import.meta.url), "utf8"),
+  );
+  const completeCoverage = {
+    complete: true,
+    surveyedChains: 18,
+    chainsWithFlyers: 9,
+    catalogsTotal: 1,
+    catalogsDone: 1,
+    offersFetched: offersFixture.products.length,
+    missing: 0,
+    gaps: 0,
+    catalogs: [
+      {
+        id: "test-catalog",
+        chain: "Meny",
+        title: "Testavis",
+        expected: offersFixture.products.length,
+        received: offersFixture.products.length,
+        done: true,
+        missing: 0,
+      },
+    ],
+  };
+  let sourceStatus = "complete",
+    forcedCollection = false,
+    collectionStarts = 0,
+    releaseCollection = null;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (String(url).startsWith("/api/collection")) {
+      const coverage =
+        sourceStatus === "complete"
+          ? completeCoverage
+          : {
+              ...completeCoverage,
+              complete: false,
+              missing: 3,
+              gaps: 1,
+              catalogs: [{ ...completeCoverage.catalogs[0], missing: 3 }],
+            };
+      if (String(url).split("?")[0] === "/api/collection") {
+        forcedCollection = String(url).includes("fresh=1");
+        collectionStarts++;
+        return Response.json({
+          id: "test-run",
+          key: "test-job-key",
+          status: "collecting",
+          coverage: { ...coverage, catalogsDone: 0 },
+        });
+      }
+      if (String(url).endsWith("/step")) {
+        if (releaseCollection) await releaseCollection;
+        if (sourceStatus === "error")
+          return Response.json({ error: "Kilden feilet" }, { status: 503 });
+        return Response.json({
+          id: "test-run",
+          status: sourceStatus,
+          coverage,
+        });
+      }
+      return Response.json({
+        ...offersFixture,
+        id: "test-run",
+        status: sourceStatus,
+        meta: {
+          ...offersFixture.meta,
+          generated: new Date().toISOString(),
+          coverage,
+        },
+      });
+    }
+    return String(url).includes("/api/profile")
       ? api(
           opts.method || "GET",
           opts.body ? JSON.parse(opts.body) : undefined,
@@ -108,6 +178,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
           ),
           { headers: { "content-type": "application/json" } },
         );
+  };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const $ = (id) => document.getElementById(id);
   const click = (selector) => {
@@ -148,6 +219,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   chicken.checked = true;
   change(chicken);
   click("#quick-plan");
+  await wait(100);
   assert.equal(document.querySelectorAll(".meal-card").length, 5);
   assert.ok(!$("meal-plan").textContent.includes("Soyakylling"));
   click('[data-view="list"]');
@@ -198,6 +270,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   change($("max-time"));
   $("meal-count").value = "3";
   change($("meal-count"));
+  await wait(100);
   assert.equal(
     document.querySelector(".meal-copy h3").textContent,
     "Restepanne",
@@ -214,8 +287,12 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   $("offer-until").value = localDate();
   submit("offer-form");
   assert.equal($("offer-error").textContent, "");
+  $("offer-search").value = "Rispose";
+  $("offer-search").dispatchEvent(new window.Event("input", { bubbles: true }));
   assert.ok($("offers-grid").textContent.includes("Rispose"));
   assert.ok($("offers-grid").textContent.includes("75 %"));
+  $("offer-search").value = "";
+  $("offer-search").dispatchEvent(new window.Event("input", { bubbles: true }));
   click('[data-view="list"]');
   assert.ok(
     $("shopping-list").textContent.includes("Rispose"),
@@ -297,12 +374,12 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   click("#offer-week");
   assert.equal($("meal-count").value, "7");
   assert.equal($("max-stores").value, "0");
-  assert.equal($("plan-mode").value, "offers");
+  assert.equal($("plan-mode").value, "discounts");
   assert.equal($("allow-repeats").checked, true);
   await wait(500);
   const week = (await (await api("GET", null, key)).json()).data;
   assert.equal(week.plan.length, 7);
-  assert.equal(week.planMode, "offers");
+  assert.equal(week.planMode, "discounts");
   assert.equal(week.allowRepeats, true);
   assert.deepEqual(week.stores, []);
   assert.deepEqual(week.locked, [0]);
@@ -313,5 +390,41 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
     (await (await api("GET", null, key)).json()).data.allowRepeats,
     false,
   );
+  click("#refresh-data");
+  await wait(100);
+  assert.equal(forcedCollection, true);
+  // Collection must finish before generation, and a count gap must not silently generate.
+  const prior = $("meal-plan").innerHTML;
+  let finish;
+  releaseCollection = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const starts = collectionStarts;
+  click("#generate-plan");
+  await wait(25);
+  assert.equal(collectionStarts, starts + 1);
+  assert.equal($("meal-plan").innerHTML, prior);
+  assert.equal($("generate-plan").disabled, true);
+  sourceStatus = "incomplete";
+  finish();
+  releaseCollection = null;
+  await wait(100);
+  assert.equal($("meal-plan").innerHTML, prior);
+  assert.equal($("partial-plan").hidden, false);
+  assert.ok($("collection-status").textContent.includes("ufullstendig"));
+  click("#partial-plan");
+  await wait(100);
+  assert.ok(
+    $("plan-data-basis").textContent.includes(
+      "etter ditt valg med ufullstendig",
+    ),
+  );
+  const partialPlan = $("meal-plan").innerHTML;
+  sourceStatus = "error";
+  click("#generate-plan");
+  await wait(100);
+  assert.equal($("meal-plan").innerHTML, partialPlan);
+  assert.equal($("partial-plan").hidden, true);
+  assert.ok($("collection-status").textContent.includes("ingen ny plan"));
   await window.happyDOM.close();
 });

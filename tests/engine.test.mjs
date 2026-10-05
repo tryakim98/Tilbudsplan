@@ -93,10 +93,11 @@ test("no egg noodles as eggs or non-food as dinner", () => {
   assert.ok(ingredientOffer({ name: "Hjertefiskekaker" }, "fishcake"));
   assert.ok(ingredientOffer({ name: "Synnøve revet" }, "cheese"));
   assert.equal(ingredientOffer({ name: "Fudge Professional" }, "mince"), false);
-  assert.equal(
-    cleanOffers([{ name: "Stor astersbukett", category: "Storfe" }]).length,
-    0,
-  );
+  const catalog = cleanOffers([
+    { name: "Stor astersbukett", category: "Storfe" },
+  ]);
+  assert.equal(catalog.length, 1);
+  assert.deepEqual(catalog[0].matches, []);
   assert.ok(ingredientOffer({ name: "Kyllingfileter" }, "chicken"));
 });
 test("shopping quantities sum across meals and round whole packages", () => {

@@ -23,12 +23,24 @@ export function validSnapshot(data, now = new Date()) {
     JSON.stringify(data).length < 1500000
   );
 }
-export function buildHistory(snapshots, current, now = new Date()) {
+export function buildHistory(
+  snapshots,
+  current,
+  now = new Date(),
+  observations = [],
+) {
   const targetPeriod = isoPeriod(current.meta.generated);
   const cutoff = new Date(now.valueOf() - 365 * dayMs)
     .toISOString()
     .slice(0, 10);
   const groups = new Map();
+  const add = (id, period, date, value) => {
+    if (period === targetPeriod || date < cutoff || !value) return;
+    if (!groups.has(id)) groups.set(id, new Map());
+    const periods = groups.get(id);
+    if (!periods.has(period)) periods.set(period, { prices: new Set(), date });
+    periods.get(period).prices.add(value);
+  };
   for (const data of snapshots) {
     if (!validSnapshot(data, now)) continue;
     const period = isoPeriod(data.meta.generated),
@@ -39,13 +51,16 @@ export function buildHistory(snapshots, current, now = new Date()) {
         value = parsePrice(o.price);
       if (!key || !value) continue;
       const id = chainInfo(o).key + "::" + key;
-      if (!groups.has(id)) groups.set(id, new Map());
-      const periods = groups.get(id);
-      if (!periods.has(period))
-        periods.set(period, { prices: new Set(), date });
-      periods.get(period).prices.add(value);
+      add(id, period, date, value);
     }
   }
+  for (const o of observations)
+    add(
+      o.chain_key + "::" + o.product_key,
+      o.period,
+      o.observed_on,
+      parsePrice(o.price),
+    );
   const result = {};
   for (const [id, periods] of groups) {
     const weeks = [...periods.values()];

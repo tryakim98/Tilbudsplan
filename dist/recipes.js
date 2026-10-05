@@ -106,7 +106,7 @@ export const INGREDIENTS = {
   coconut: ["Kokosmelk", "ml", 400, 25, "Tørrvarer", ["kokosmelk"]],
   soy: ["Soyasaus", "ml", 150, 25, "Basisvarer", ["soyasaus"]],
   honey: ["Honning", "g", 350, 45, "Basisvarer", ["honning"]],
-  oil: ["Nøytral olje", "ml", 1000, 35, "Basisvarer", []],
+  oil: ["Nøytral olje", "ml", 1000, 35, "Basisvarer", ["rapsolje", "solsikkeolje"]],
   vinegar: ["Eddik", "ml", 500, 20, "Basisvarer", []],
   mustard: ["Dijonsennep", "g", 200, 30, "Basisvarer", []],
   curry: ["Karripulver", "g", 50, 20, "Basisvarer", []],

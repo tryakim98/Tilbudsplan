@@ -1,5 +1,12 @@
 import { validateProfile, withDefaults } from "../dist/model.js";
 import { readOffers, refreshOffers } from "./offers.js";
+import {
+  startCollection,
+  authorizedRun,
+  stepCollection,
+  collectionResult,
+  lastCollection,
+} from "./collection.js";
 export { validateProfile };
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -27,8 +34,61 @@ function db(env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (
+      url.pathname === "/api/collection" ||
+      url.pathname.startsWith("/api/collection/")
+    ) {
+      const origin = request.headers.get("origin");
+      if (origin && origin !== url.origin)
+        return json({ error: "Ugyldig avsender" }, 403);
+      try {
+        db(env);
+        if (url.pathname === "/api/collection" && request.method === "POST") {
+          return json(
+            await startCollection(
+              env,
+              new Date(),
+              url.searchParams.has("fresh"),
+            ),
+            201,
+          );
+        }
+        const path = url.pathname.match(
+          /^\/api\/collection\/([a-f0-9-]{36})(\/step)?$/,
+        );
+        if (!path) return json({ error: "Ukjent innsamlingsadresse" }, 404);
+        const run = await authorizedRun(
+          env,
+          path[1],
+          request.headers.get("authorization")?.replace(/^Bearer /, ""),
+        );
+        if (!run)
+          return json(
+            { error: "Innsamlingsnøkkelen er ugyldig. Start en ny henting." },
+            401,
+          );
+        if (path[2] && request.method === "POST")
+          return json(await stepCollection(env, run));
+        if (!path[2] && request.method === "GET")
+          return json(await collectionResult(env, run));
+        return json({ error: "Metoden støttes ikke" }, 405);
+      } catch (error) {
+        console.error("Flyer collection failed", error.message);
+        return json(
+          {
+            error:
+              "Innsamlingen kunne ikke fullføres: " +
+              error.message +
+              " Den eksisterende planen er beholdt.",
+          },
+          503,
+        );
+      }
+    }
     if (url.pathname === "/api/offers" && request.method === "GET") {
       try {
+        const direct = await lastCollection(env);
+        if (direct) return json(direct);
         const profileKey = request.headers
           .get("authorization")
           ?.replace(/^Bearer /, "");

@@ -53,6 +53,7 @@ export function chainInfo(o) {
 }
 export function packInfo(o) {
   if (o.manual) return { quantity: o.quantity, unit: o.unit || null };
+  if (o.structured) return o.sourcePack || null;
   const s = String(o.mengde || "")
     .replaceAll(",", ".")
     .toLowerCase()
@@ -81,6 +82,23 @@ export function priceBasis(o) {
   const current = parsePrice(o.price),
     pack = packInfo(o);
   if (o.manual) return { current, pack, safe: current > 0, reason: "" };
+  if (o.structured) {
+    let safe = current > 0 && !!pack && o.currency === "NOK";
+    let reason = safe
+      ? ""
+      : "Pris eller entydig pakningsmengde mangler. Tilbudet vises, men brukes ikke i prisanslaget.";
+    const unit = { kilogram: "g", liter: "ml", piece: "stk" }[o.baseUnit];
+    if (safe && o.unitPrice > 0 && pack.unit === unit) {
+      const calculated =
+        (current / pack.quantity) * (unit === "stk" ? 1 : 1000);
+      if (Math.abs(calculated - o.unitPrice) / o.unitPrice > 0.04) {
+        safe = false;
+        reason =
+          "Pris, mengde og kildens enhetspris stemmer ikke overens. Kontroller kundeavisen.";
+      }
+    }
+    return { current, pack, safe, reason };
+  }
   const quoted = String(o.merknad || "").match(
     /(\d+(?:[.,]\d{1,2})?)\s*[,.-]*\s*\/\s*(kilogram|kg|liter|l|piece|stk)\b/i,
   );
@@ -106,7 +124,7 @@ export function comparison(o, history = o.history) {
   const basis = priceBasis(o),
     current = basis.current;
   let before = parsePrice(o.beforePrice ?? o.original_price ?? o.before_price),
-    beforeSource = before ? "Oppgitt førpris" : "";
+    beforeSource = before ? o.beforeOrigin || "Oppgitt førpris" : "";
   if (!before) {
     const m = String(o.mengde || "").match(
       /(?:førpris|forpris|før\s*:)\s*:?\s*(?:kr\s*)?(\d+(?:[.,]\d{1,2})?)/i,
@@ -116,7 +134,7 @@ export function comparison(o, history = o.history) {
       beforeSource = "Oppgitt førpris";
     }
   }
-  if (!before && current) {
+  if (!before && current && !o.structured) {
     const m = String(o.merknad || "").match(
       /\bspar\s+(?:kr\s*)?(\d+(?:[.,]\d{1,2})?)/i,
     );
@@ -129,7 +147,12 @@ export function comparison(o, history = o.history) {
     before = null;
     beforeSource = "";
   }
-  const discount = before && current ? (1 - current / before) * 100 : null;
+  const advertised =
+    o.advertisedDiscount > 0 && o.advertisedDiscount <= 100
+      ? o.advertisedDiscount
+      : null;
+  const discount =
+    before && current ? (1 - current / before) * 100 : advertised;
   const mean = history?.mean > 0 ? history.mean : null;
   const historicDiscount = mean && current ? (1 - current / mean) * 100 : null;
   let rating = "Rabatt ukjent",
@@ -139,7 +162,13 @@ export function comparison(o, history = o.history) {
       "Kilden oppgir ingen sammenlignbar førpris. Historikken bygges opp.";
   const reliableHistory = history?.weeks >= 4 && mean;
   const pct = reliableHistory ? historicDiscount : discount;
-  if (!basis.safe) {
+  if (!basis.safe && !current && advertised) {
+    rating = "Annonsert " + advertised + " % rabatt";
+    level = advertised >= 30 ? "great" : advertised >= 15 ? "good" : "small";
+    score = advertised;
+    explanation =
+      "Prosenttilbudet er hentet fra kilden. En konkret varepris eller pakningsmengde mangler, så rabatten kan ikke brukes i handleanslaget.";
+  } else if (!basis.safe) {
     rating = "Prisgrunnlag uklart";
     explanation = basis.reason || "Prisen kan ikke tolkes som en pakningspris.";
   } else if (pct !== null) {
@@ -182,6 +211,21 @@ export function comparison(o, history = o.history) {
 export function productKey(o) {
   const pack = packInfo(o);
   if (!pack || !priceBasis(o).safe || o.manual) return null;
+  if (o.structured) {
+    const descriptor = String(o.mengde || "")
+      .replace(
+        /\d+(?:[.,]\d+)?\s*(?:kr\.?|,-|pr\.?\s*(?:kg|g|l|stk)|g\b|kg\b|ml\b|l\b)/gi,
+        "",
+      )
+      .replace(/(?:ikke[- ]?medlem|medlem|spar|førpris)[\s\S]*/i, "");
+    return [
+      normalizeText(o.name),
+      normalizeText(descriptor),
+      pack.unit,
+      pack.quantity,
+      o.accessKind,
+    ].join("|");
+  }
   const descriptor = String(o.mengde || "")
     .split(/førpris|forpris/i)[0]
     .replace(/\d+(?:[.,]\d+)?\s*(?:kg|g|ml|dl|l|stk|pk)\b/gi, "")

@@ -62,6 +62,32 @@
       <div id="data-warning" class="notice" role="status">
         Henter tilbudsgrunnlag …
       </div>
+      <section
+        id="collection-panel"
+        class="collection-panel"
+        hidden
+        aria-label="Innsamling av tilbud"
+      >
+        <p id="collection-status" role="status" aria-live="polite"></p>
+        <progress
+          id="collection-progress"
+          max="1"
+          value="0"
+          aria-label="Tilbudsaviser kontrollert"
+        ></progress>
+        <p class="small-note">
+          Henter alle registrerte tilbud i alle publiserte avisvarianter fra
+          norske dagligvarekjeder i eTilbudsavis. Trykte tilbud som mangler i
+          kildens data kan ikke garanteres.
+        </p>
+        <details id="collection-details">
+          <summary>Se dekning per tilbudsavis</summary>
+          <div class="coverage-table-wrap" id="collection-table"></div>
+        </details>
+        <button id="partial-plan" class="secondary-button" hidden>
+          Lag plan med ufullstendig grunnlag
+        </button>
+      </section>
       <nav class="flow-tabs" aria-label="Hovedmeny">
         <button class="flow-tab is-active" data-view="plan" aria-current="page">
           Ukeplan <b id="plan-count-badge">0</b>
@@ -134,6 +160,7 @@
             >Planlegg etter<select id="plan-mode">
               <option value="taste">Smak og preferanser</option>
               <option value="offers">Flest mulig varer på tilbud</option>
+              <option value="discounts">Beste dokumenterte rabatter</option>
             </select></label
           >
           <label
@@ -169,10 +196,13 @@
         </div>
         <p class="small-note">
           Tilbudsuke lager 7 middager, bruker alle kjeder og tillater
-          gjentakelser for å finne høy tilbudsandel. Du kan slå av gjentakelser
-          eller begrense antall butikker.
+          gjentakelser. Alle tilbud hentes og kontrolleres før planen lages.
+          Større dokumentert prosentavslag prioriteres etter tilbudsandelen.
+          Store pakker kan koste mer; sjekk handleanslaget og sett gjerne
+          budsjett.
         </p>
         <p id="coverage-status" class="notice" hidden></p>
+        <p id="plan-data-basis" class="small-note" hidden></p>
         <p id="budget-status" class="notice" hidden></p>
         <div id="plan-summary" class="plan-summary"></div>
         <div id="plan-empty" class="empty-state">
@@ -198,12 +228,12 @@
         <div class="view-heading">
           <div>
             <p class="section-kicker">Råvarene først</p>
-            <h2 id="offers-heading">Tilbud som kan bli middag</h2>
+            <h2 id="offers-heading">Hele tilbudsoversikten</h2>
             <p id="source-updated"></p>
             <p id="history-summary" class="small-note"></p>
           </div>
           <button id="refresh-data" class="secondary-button">
-            Oppdater tilbud
+            Hent og kontroller alle tilbud
           </button>
         </div>
         <details class="entry-panel">
@@ -292,11 +322,24 @@
               </p>
               <div id="store-filters" class="filter-list"></div>
             </fieldset>
+            <label class="check-line"
+              ><input type="checkbox" id="only-matched" />Bare tilbud som passer
+              oppskriftene</label
+            >
+            <fieldset>
+              <legend>Priser jeg kan bruke</legend>
+              <p class="small-note">
+                Kryss bare av medlems- og apppriser du har tilgang til. Ingen er
+                valgt automatisk.
+              </p>
+              <div id="membership-filters" class="filter-list"></div>
+            </fieldset>
             <div class="source-note">
               <strong>Om prisene</strong>
               <p>
-                Data fra Olewol/tilbudsavis, basert på eTilbudsavis.
-                Tilgjengelighet og lokal gyldighet er ikke verifisert.
+                Nye tilbud hentes direkte fra eTilbudsavis. Eldre historikk kan
+                også komme fra Olewol/tilbudsavis. Tilgjengelighet og lokal
+                gyldighet er ikke verifisert.
               </p>
               <p>
                 Førpris er oppgitt i annonsen eller utledet fra «spar».
@@ -323,6 +366,11 @@
               </select>
             </div>
             <div id="offers-grid" class="offers-grid"></div>
+            <div class="offers-pagination">
+              <button id="offers-prev" class="secondary-button">Forrige</button
+              ><span id="offers-page" role="status"></span
+              ><button id="offers-next" class="secondary-button">Neste</button>
+            </div>
           </div>
         </div>
       </section>

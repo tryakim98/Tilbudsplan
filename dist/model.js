@@ -13,6 +13,9 @@ export const emptyProfile = (name = "Min kokebok") => ({
   selected: [],
   excluded: [],
   stores: [],
+  memberChains: [],
+  appChains: [],
+  planBasis: null,
   servings: 2,
   days: 5,
   maxStores: 2,
@@ -32,13 +35,14 @@ export const withDefaults = (data) => {
   return p;
 };
 export const catalog = (p) => [...RECIPES, ...(p.customRecipes || [])];
+const osloDate = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Oslo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 export function localDate(now = new Date()) {
-  return new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Europe/Oslo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
+  return osloDate.format(now);
 }
 const object = (x) => !!x && typeof x === "object" && !Array.isArray(x);
 const text = (x, max = 300) => typeof x === "string" && x.length <= max;
@@ -117,6 +121,8 @@ export function validateProfile(raw) {
     "selected",
     "excluded",
     "stores",
+    "memberChains",
+    "appChains",
   ])
     if (
       !Array.isArray(p[k]) ||
@@ -131,8 +137,18 @@ export function validateProfile(raw) {
     p.days < 1 ||
     p.days > 7 ||
     ![0, 1, 2, 3, 8].includes(p.maxStores) ||
-    !["taste", "offers"].includes(p.planMode) ||
+    !["taste", "offers", "discounts"].includes(p.planMode) ||
     typeof p.allowRepeats !== "boolean"
+  )
+    return false;
+  if (
+    p.planBasis !== null &&
+    (!object(p.planBasis) ||
+      !text(p.planBasis.generated, 40) ||
+      typeof p.planBasis.complete !== "boolean" ||
+      !finite(p.planBasis.offers) ||
+      !finite(p.planBasis.catalogs) ||
+      !finite(p.planBasis.missing))
   )
     return false;
   if (

@@ -40,6 +40,16 @@ writeFileSync(
   ),
 );
 writeFileSync(
+  "dist/server/collection.js",
+  readFileSync("worker/collection.js", "utf8")
+    .replace("../dist/offers.js", "./offers.js")
+    .replace("../dist/model.js", "./model.js")
+    .replace(
+      'import { buildHistory } from "./offers.js";',
+      'import { buildHistory } from "./offers-worker.js";',
+    ),
+);
+writeFileSync(
   "dist/.openai/hosting.json",
   readFileSync(".openai/hosting.json"),
 );
