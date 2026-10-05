@@ -1,5 +1,6 @@
 import { INGREDIENTS } from "./recipes.js";
 import { catalog, emptyProfile, withDefaults, localDate } from "./model.js";
+import { chainInfo, priceBasis, packInfo } from "./offers.js";
 export { emptyProfile, withDefaults, catalog };
 export const normalize = (s = "") =>
   String(s)
@@ -28,22 +29,14 @@ export function price(value) {
 }
 export function packageSize(o, unit) {
   if (o.manual) return o.quantity;
-  const text = String(o.mengde || "")
-    .replaceAll(",", ".")
-    .toLowerCase();
-  if (/\d\s*[-–x×]\s*\d/.test(text)) return null;
-  if (unit === "g") {
-    const m = text.match(/\b(\d+(?:\.\d+)?)\s*(kg|g)\b/);
-    if (m) return Number(m[1]) * (m[2] === "kg" ? 1000 : 1);
-    return /\b(?:pr\.?|per)\s*kg\b/.test(text) ? 1000 : null;
-  }
-  if (unit === "ml") {
-    const m = text.match(/\b(\d+(?:\.\d+)?)\s*(ml|dl|l)\b/);
-    return m ? Number(m[1]) * { ml: 1, dl: 100, l: 1000 }[m[2]] : null;
-  }
+  const pack = packInfo(o);
+  if (pack?.unit === unit) return pack.quantity;
+  // A stated pack count is usable even when the source also supplies egg weight.
   if (unit === "stk") {
-    const m = text.match(/\b(\d+)\s*(?:stk|pk|pakning)\b/);
-    return m ? Number(m[1]) : null;
+    const m = String(o.name || "").match(
+      /\b(\d+)\s*[- ]?\s*(?:stk|pk|pakning)\b/i,
+    );
+    if (m) return Number(m[1]);
   }
   return null;
 }
@@ -57,6 +50,13 @@ export function ingredientOffer(o, id) {
   )
     return false;
   if (["beans", "chickpeas"].includes(id)) return false;
+  if (id === "honey" && /melon|kylling|sennep|glasur/.test(text)) return false;
+  if (
+    id === "chicken" &&
+    (/(?:^| )(?:skivet|stekt|grillet|rokt|palegg)(?: |$)/.test(text) ||
+      /prior kyllingfilet pepper/.test(text))
+  )
+    return false;
   if (
     ["pepper", "onion", "garlic", "lemon", "cucumber", "eggs"].includes(id) &&
     /pulver|krydder|saus|dressing|salat|sjokolade|pask/.test(text)
@@ -71,8 +71,10 @@ export function cleanOffers(products = []) {
   for (const raw of products) {
     if (!raw || typeof raw.name !== "string") continue;
     const o = { ...raw };
-    o.store_key = String(o.store_key || normalize(o.store));
-    o.store_label = String(o.store_label || o.store || "Ukjent butikk");
+    const chain = chainInfo(o);
+    o.source_store_label = o.store_label || o.store || "";
+    o.store_key = chain.key;
+    o.store_label = chain.label;
     o.id = normalize([o.store_key, o.name, o.mengde, o.price].join(" "));
     o.matches = Object.keys(INGREDIENTS).filter((id) => ingredientOffer(o, id));
     if (o.matches.length) map.set(o.id, o);
@@ -86,8 +88,9 @@ export function combinedOffers(offers, p) {
       ...o,
       manual: true,
       matches: [o.ingredient],
-      store_key: normalize(o.store),
-      store_label: o.store,
+      store_key: chainInfo(o).key,
+      store_label: chainInfo(o).label,
+      unit: INGREDIENTS[o.ingredient][1],
       category: INGREDIENTS[o.ingredient][4],
       mengde: o.quantity + " " + INGREDIENTS[o.ingredient][1],
     })),
@@ -115,11 +118,12 @@ export const eligible = (r, p) =>
   (!p.maxTime || r.time <= p.maxTime);
 export function availableOffers(offers, p, stale) {
   const today = localDate();
+  const stores = p.stores.map((x) => chainInfo(x).key);
   return combinedOffers(offers, p).filter(
     (o) =>
       offerActive(o, stale, today) &&
       !p.excluded.includes(o.id) &&
-      (!p.stores.length || p.stores.includes(o.store_key)) &&
+      (!stores.length || stores.includes(o.store_key)) &&
       !o.matches.some((id) => p.dislikes.includes(id)),
   );
 }
@@ -127,7 +131,7 @@ export function offerFor(id, quantity, pool) {
   if (quantity <= 0) return null;
   return (
     pool
-      .filter((o) => ingredientOffer(o, id))
+      .filter((o) => ingredientOffer(o, id) && priceBasis(o).safe)
       .map((o) => ({
         offer: o,
         size: packageSize(o, INGREDIENTS[id][1]),
@@ -151,7 +155,7 @@ export function storePool(offers, p) {
   const allowed = new Set(
     [...scores]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, p.maxStores)
+      .slice(0, p.maxStores || scores.size)
       .map((x) => x[0]),
   );
   return offers.filter((o) => allowed.has(o.store_key));
@@ -202,11 +206,13 @@ function basketWithPool(p, pool) {
   const totals = totalsFor(p);
   // Compare actual basket cost across store combinations, not offer counts.
   const keys = [...new Set(pool.map((o) => o.store_key))];
-  if (keys.length <= p.maxStores) return itemsFor(p, totals, pool);
+  if (!p.maxStores || keys.length <= p.maxStores)
+    return itemsFor(p, totals, pool);
   if (keys.length > 8) {
     const chosen = [];
     let best = itemsFor(p, totals, []);
     let bestCost = Infinity;
+    let bestCoverage = -1;
     for (let round = 0; round < p.maxStores; round++) {
       let next = null;
       for (const key of keys.filter((k) => !chosen.includes(k))) {
@@ -218,10 +224,17 @@ function basketWithPool(p, pool) {
           ),
         );
         const cost = items.reduce((n, i) => n + i.cost, 0);
-        if (cost < bestCost - 0.01) {
+        const offered = coverage(items).percent;
+        if (
+          (p.planMode === "offers" && offered > bestCoverage + 0.001) ||
+          ((p.planMode !== "offers" ||
+            Math.abs(offered - bestCoverage) < 0.001) &&
+            cost < bestCost - 0.01)
+        ) {
           next = key;
           best = items;
           bestCost = cost;
+          bestCoverage = offered;
         }
       }
       if (!next) break;
@@ -232,6 +245,7 @@ function basketWithPool(p, pool) {
   let best = null;
   let bestCost = Infinity;
   let bestCount = Infinity;
+  let bestCoverage = -1;
   for (let mask = 1; mask < 2 ** keys.length; mask++) {
     const chosen = keys.filter((_, i) => mask & (1 << i));
     if (chosen.length > p.maxStores) continue;
@@ -241,22 +255,36 @@ function basketWithPool(p, pool) {
       pool.filter((o) => chosen.includes(o.store_key)),
     );
     const cost = items.reduce((n, i) => n + i.cost, 0);
+    const offered = coverage(items).percent;
     const used = new Set(
       items.filter((i) => i.offer).map((i) => i.offer.store_key),
     ).size;
     if (
-      cost < bestCost - 0.01 ||
-      (Math.abs(cost - bestCost) < 0.01 && used < bestCount)
+      (p.planMode === "offers" && offered > bestCoverage + 0.001) ||
+      ((p.planMode !== "offers" || Math.abs(offered - bestCoverage) < 0.001) &&
+        (cost < bestCost - 0.01 ||
+          (Math.abs(cost - bestCost) < 0.01 && used < bestCount)))
     ) {
       best = items;
       bestCost = cost;
       bestCount = used;
+      bestCoverage = offered;
     }
   }
   return best || itemsFor(p, totals, []);
 }
 export const basketTotal = (p, offers, stale) =>
   basket(p, offers, stale).reduce((n, i) => n + i.cost, 0);
+export function coverage(items) {
+  const needed = items.filter((i) => i.need > 0),
+    offered = needed.filter((i) => i.offer);
+  return {
+    total: needed.length,
+    offered: offered.length,
+    percent: needed.length ? (offered.length / needed.length) * 100 : 100,
+    missing: needed.filter((i) => !i.offer),
+  };
+}
 export function recipeEstimate(r, servings = 2) {
   return r.ingredients.reduce(
     (sum, [id, n]) =>
@@ -277,6 +305,15 @@ export function recipeScore(r, p, pool) {
       n + Math.min(1, (p.pantry?.[id] || 0) / ((q * p.servings) / 2)),
     0,
   );
+  const needs = r.ingredients.filter(
+    ([id, n]) => (n * p.servings) / 2 > (p.pantry?.[id] || 0),
+  );
+  const offerShare =
+    p.planMode === "offers" && needs.length
+      ? needs.filter(([id, n]) =>
+          offerFor(id, (n * p.servings) / 2 - (p.pantry?.[id] || 0), pool),
+        ).length / needs.length
+      : 0;
   return (
     matches.length * 3 +
     picked * 8 +
@@ -284,7 +321,8 @@ export function recipeScore(r, p, pool) {
     r.ingredients.filter(([id]) => p.favorites.includes(id)).length * 4 +
     (p.saved.includes(r.id) ? 3 : 0) +
     ((p.ratings[r.id] || 3) - 3) * 4 +
-    pantry * 2
+    pantry * 2 +
+    offerShare * 200
   );
 }
 export function makePlan(p, offers, stale, variation = 0) {
@@ -300,34 +338,89 @@ export function makePlan(p, offers, stale, variation = 0) {
     }
   }
   const remaining = all.filter((r) => eligible(r, p) && !chosen.includes(r.id));
-  for (let i = 0; i < p.days && remaining.length; i++) {
+  const baseScores = new Map(
+    all
+      .filter((r) => eligible(r, p))
+      .map((r) => [r.id, recipeScore(r, p, pool)]),
+  );
+  for (let i = 0; i < p.days; i++) {
     if (chosen[i]) continue;
+    const candidates = remaining.length
+      ? remaining
+      : p.allowRepeats
+        ? all.filter((r) => eligible(r, p))
+        : [];
+    if (!candidates.length) break;
     const score = (r) =>
-      recipeScore(r, p, pool) +
+      baseScores.get(r.id) +
       r.ingredients.filter(([id]) => used.has(id)).length * 0.6 +
       (variation ? ((all.indexOf(r) * 17 + variation * 13) % 23) / 4 : 0);
-    remaining.sort((a, b) => score(b) - score(a));
-    const r = remaining.shift();
+    candidates.sort((a, b) => score(b) - score(a));
+    const r = candidates.shift();
     chosen[i] = r.id;
     r.ingredients.forEach(([id]) => used.add(id));
   }
   let plan = chosen.filter(Boolean);
-  const lockedIds = new Set(
-    (p.locked || []).map((i) => chosen[i]).filter(Boolean),
-  );
+  const lockedPositions = new Set();
+  let compactIndex = 0;
+  chosen.forEach((id, i) => {
+    if (!id) return;
+    if (p.locked.includes(i)) lockedPositions.add(compactIndex);
+    compactIndex++;
+  });
   const costs = new Map();
+  const baskets = new Map();
+  const basketFor = (ids) => {
+    const key = [...ids].sort().join("|");
+    if (!baskets.has(key))
+      baskets.set(key, basketWithPool({ ...p, plan: ids }, pool));
+    return baskets.get(key);
+  };
   const costFor = (ids) => {
     const key = [...ids].sort().join("|");
     if (!costs.has(key))
       costs.set(
         key,
-        basketWithPool({ ...p, plan: ids }, pool).reduce(
-          (n, i) => n + i.cost,
-          0,
-        ),
+        basketFor(ids).reduce((n, i) => n + i.cost, 0),
       );
     return costs.get(key);
   };
+  // Offer mode maximizes the share of grocery lines with usable offer prices.
+  if (p.planMode === "offers" && pool.length) {
+    for (let round = 0; round < 7; round++) {
+      const current = coverage(basketFor(plan));
+      let best = null;
+      for (let i = 0; i < plan.length; i++) {
+        if (lockedPositions.has(i)) continue;
+        for (const r of all) {
+          if (
+            !eligible(r, p) ||
+            r.id === plan[i] ||
+            (!p.allowRepeats && plan.includes(r.id))
+          )
+            continue;
+          const trial = [...plan];
+          trial[i] = r.id;
+          const value = coverage(basketFor(trial)),
+            cost = costFor(trial);
+          const improves =
+            value.percent > current.percent + 0.001 ||
+            (Math.abs(value.percent - current.percent) < 0.001 &&
+              cost < costFor(plan) - 0.01);
+          if (
+            improves &&
+            (!best ||
+              value.percent > best.percent + 0.001 ||
+              (Math.abs(value.percent - best.percent) < 0.001 &&
+                cost < best.cost - 0.01))
+          )
+            best = { plan: trial, percent: value.percent, cost };
+        }
+      }
+      if (!best) break;
+      plan = best.plan;
+    }
+  }
   // Bounded local search: lower full-package cost while keeping locked meals and constraints.
   if (p.budget > 0) {
     for (let round = 0; round < 7; round++) {
@@ -335,11 +428,22 @@ export function makePlan(p, offers, stale, variation = 0) {
       if (cost <= p.budget) break;
       let best = null;
       for (let i = 0; i < plan.length; i++) {
-        if (lockedIds.has(plan[i])) continue;
+        if (lockedPositions.has(i)) continue;
         for (const r of all) {
-          if (!eligible(r, p) || plan.includes(r.id)) continue;
+          if (
+            !eligible(r, p) ||
+            r.id === plan[i] ||
+            (!p.allowRepeats && plan.includes(r.id))
+          )
+            continue;
           const trial = [...plan];
           trial[i] = r.id;
+          if (
+            p.planMode === "offers" &&
+            coverage(basketFor(trial)).percent + 0.001 <
+              coverage(basketFor(plan)).percent
+          )
+            continue;
           const candidate = costFor(trial);
           if (
             candidate < cost - 0.01 &&

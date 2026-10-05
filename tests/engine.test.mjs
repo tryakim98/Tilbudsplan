@@ -73,12 +73,25 @@ test("parse prices conservatively", () => {
   assert.equal(price("3 for 2"), null);
   assert.equal(price("-40%"), null);
   assert.equal(price("fra 30"), null);
-  assert.equal(packageSize({ mengde: "2 x 400 g" }, "g"), null);
+  assert.equal(packageSize({ mengde: "2 x 400 g" }, "g"), 800);
+  assert.equal(packageSize({ mengde: "400 g eller 500 g" }, "g"), null);
+  assert.equal(packageSize({ name: "EGG 6PK", mengde: "402 g" }, "stk"), 6);
+  assert.equal(packageSize({ mengde: "18-pk" }, "stk"), 18);
   assert.equal(packageSize({ mengde: "400–600 g" }, "g"), null);
   assert.equal(packageSize({ mengde: "1,5 kg" }, "g"), 1500);
 });
 test("no egg noodles as eggs or non-food as dinner", () => {
   assert.equal(ingredientOffer({ name: "Eggnudler" }, "eggs"), false);
+  assert.equal(ingredientOffer({ name: "Melon honning" }, "honey"), false);
+  assert.equal(
+    ingredientOffer(
+      { name: "Prior kyllingfilet pepper og hvitløk" },
+      "chicken",
+    ),
+    false,
+  );
+  assert.ok(ingredientOffer({ name: "Hjertefiskekaker" }, "fishcake"));
+  assert.ok(ingredientOffer({ name: "Synnøve revet" }, "cheese"));
   assert.equal(ingredientOffer({ name: "Fudge Professional" }, "mince"), false);
   assert.equal(
     cleanOffers([{ name: "Stor astersbukett", category: "Storfe" }]).length,

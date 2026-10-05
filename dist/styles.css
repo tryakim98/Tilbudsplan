@@ -1601,6 +1601,90 @@ fieldset {
 }
 
 /* Personal kitchen tools follow the existing quiet green palette. */
+.offer-comparison {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.9375rem;
+}
+.offer-comparison del {
+  color: var(--muted);
+  text-decoration-thickness: 2px;
+}
+.discount {
+  color: #215c35;
+}
+.history-price {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.history-price small,
+.used-comparison small {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #52625b;
+}
+.deal-rating {
+  display: inline-block;
+  align-self: start;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-weight: 700;
+  font-size: 0.875rem;
+  background: #edf0ee;
+  color: #30413a;
+}
+.deal-rating.great,
+.deal-rating.good {
+  background: #d8ef8b;
+  color: #123a2b;
+}
+.deal-rating.weak,
+.deal-rating.unknown {
+  background: #fff0d9;
+  color: #79500c;
+}
+.deal-basis {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.deal-basis summary {
+  cursor: pointer;
+}
+.deal-basis p {
+  margin: 10px 0;
+}
+.used-comparison {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  font-style: normal;
+}
+.used-comparison .discount {
+  font-size: 0.875rem;
+}
+.used-offer {
+  display: block;
+}
+.offer-card {
+  height: auto;
+}
+.offer-card .offer-actions {
+  margin-top: auto;
+}
+#coverage-status {
+  border-left-color: #215c35;
+  background: #ecf4e7;
+}
+#coverage-status.over-budget {
+  border-left-color: #a66313;
+  background: #fff1d9;
+}
 .public-label {
   font-size: 0.875rem;
   padding: 6px 10px;

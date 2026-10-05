@@ -17,6 +17,7 @@ import {
   combinedOffers,
   offerActive,
   reconcileChecks,
+  coverage,
 } from "./engine.js";
 import {
   localDate,
@@ -24,6 +25,7 @@ import {
   validManualOffer,
   validateProfile,
 } from "./model.js";
+import { chainInfo, comparison } from "./offers.js";
 const $ = (id) => document.getElementById(id);
 const html = (s = "") =>
   String(s).replace(
@@ -175,11 +177,13 @@ function view(name) {
   render();
 }
 function syncControls() {
-  $("meal-count").value = s.p.days;
-  $("servings").value = s.p.servings;
-  $("max-stores").value = s.p.maxStores;
+  $("meal-count").value = String(s.p.days);
+  $("servings").value = String(s.p.servings);
+  $("max-stores").value = String(s.p.maxStores);
+  $("plan-mode").value = s.p.planMode;
+  $("allow-repeats").checked = s.p.allowRepeats;
   $("budget-input").value = s.p.budget || "";
-  $("max-time").value = s.p.maxTime;
+  $("max-time").value = String(s.p.maxTime);
   $("name-input").value = s.key ? s.p.name : "";
 }
 function counts() {
@@ -229,17 +233,25 @@ function generate() {
     toast("Vent et øyeblikk mens profilen lastes.");
     return;
   }
-  const locked = s.p.locked.map((i) => s.p.plan[i]);
+  const locked = s.p.locked.map((i) => ({ id: s.p.plan[i], index: i }));
   mutatePlan(() => {
     s.p.plan = makePlan(s.p, s.offers, s.stale, ++s.variation);
-    s.p.locked = s.p.plan.flatMap((id, i) => (locked.includes(id) ? [i] : []));
+    const positions = new Set();
+    for (const { id, index } of locked) {
+      const target =
+        s.p.plan[index] === id && !positions.has(index)
+          ? index
+          : s.p.plan.findIndex((item, i) => item === id && !positions.has(i));
+      if (target >= 0) positions.add(target);
+    }
+    s.p.locked = [...positions].sort((a, b) => a - b);
   });
   view("plan");
   if (s.p.plan.length < s.p.days)
     toast(
       "Færre retter passer. Prøv flere råvarer eller en høyere tidsgrense.",
     );
-  else if (locked.some((id) => !s.p.plan.includes(id)))
+  else if (s.p.locked.length < locked.length)
     toast(
       "En låst middag falt ut på grunn av nye matvalg, tidsgrense eller færre middager.",
     );
@@ -250,10 +262,36 @@ function mutatePlan(change) {
   s.p.checked = reconcileChecks(s.p, before, basket(s.p, s.offers, s.stale));
   changed();
 }
+function offerComparison(o, compact = false) {
+  const c = comparison(o);
+  const before = !c.safe
+    ? "<span>Førpris kan ikke sammenlignes</span>"
+    : c.before
+      ? `<span>Før <del>${money(c.before)}</del></span>`
+      : "<span>Førpris ikke oppgitt</span>";
+  const savings =
+    c.before && c.safe
+      ? `<strong class="discount">${money(c.before - c.current)} lavere · ${amount(c.discount)} %</strong>`
+      : "";
+  const history = c.history
+    ? `<span>Tilbudssnitt siste 365 dager <strong>${money(c.history.mean)}</strong></span><small>${c.history.weeks} observerte uker · ${html(c.history.from)} til ${html(c.history.until)}</small>`
+    : "<small>Tilbudssnitt: ingen tidligere sammenlignbare uker ennå.</small>";
+  if (compact)
+    return `<div class="used-comparison">${before}${savings}<span class="deal-rating ${c.level}">${html(c.rating)}</span>${c.history ? `<small>Tilbudssnitt ${money(c.history.mean)} · ${c.history.weeks} uker</small>` : ""}${!c.safe ? `<small>${html(c.reason)}</small>` : ""}</div>`;
+  return `<div class="offer-comparison">${before}${savings}<div class="history-price">${history}</div><span class="deal-rating ${c.level}">${html(c.rating)}</span><details class="deal-basis"><summary>Grunnlag for vurderingen</summary><p>${html(c.explanation)}</p>${c.before ? `<p>${html(c.beforeSource)}. Dette er annonsens sammenligning, ikke en verifisert normalpris.</p>` : ""}${c.history ? `<p>Laveste observerte ukepris: ${money(c.history.min)}. Historikken gjelder tilbudspriser i samme kjede og pakning; ukene uten registrering er ukjente.</p>` : ""}${o.merknad ? `<p>Kilden oppgir: ${html(o.merknad)}</p>` : ""}</details></div>`;
+}
 function renderPlan() {
   const items = basket(s.p, s.offers, s.stale);
   const total = items.reduce((n, i) => n + i.cost, 0);
   const toBuy = items.filter((i) => i.need > 0);
+  const covered = coverage(items);
+  $("coverage-status").hidden = !s.p.plan.length;
+  $("coverage-status").textContent =
+    `${covered.offered} av ${covered.total} varer som må kjøpes har brukbar tilbudspris (${amount(covered.percent)} %). ${s.p.planMode === "offers" && covered.percent < 80 ? (s.stale ? "Felles tilbudsgrunnlag er gammelt. Legg inn gyldige egne tilbud eller oppdater kilden." : "Målet er minst 80 %. Det nås ikke med dagens retter og tilbud. Varene uten tilbud står i handlelisten.") : "Varer du har nok av hjemme er holdt utenfor andelen."}`;
+  $("coverage-status").classList.toggle(
+    "over-budget",
+    s.p.planMode === "offers" && covered.percent < 80,
+  );
   $("plan-empty").hidden = !!s.p.plan.length;
   $("plan-summary").hidden = !s.p.plan.length;
   $("plan-context").textContent = s.p.goals.length
@@ -279,15 +317,18 @@ function renderPlan() {
         .filter((i) => i.offer && r.ingredients.some(([iid]) => iid === i.id))
         .slice(0, 3);
       const locked = s.p.locked.includes(index);
-      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy"><h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Tilbud i handlelisten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="used-offer"><strong>${html(i.offer.name)}</strong><em>${html(i.offer.store_label)} · ${money(price(i.offer.price))} per pakning</em></div>`).join("")}<p class="small-note">Tilbud uten sikker mengde brukes ikke i anslaget. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
+      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy"><h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Tilbud i handlelisten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="used-offer"><strong>${html(i.offer.name)}</strong><em>${html(i.offer.store_label)} · ${money(price(i.offer.price))}</em>${offerComparison(i.offer, true)}</div>`).join("")}<p class="small-note">Tilbud uten sikker mengde brukes ikke i anslaget. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
     })
     .join("");
 }
 function renderOffers() {
   const all = combinedOffers(s.offers, s.p);
   const stores = [
-    ...new Map(all.map((o) => [o.store_key, o.store_label])).entries(),
-  ];
+    ...new Map([
+      ...(s.meta.chains || []).map((c) => [c.key, c.label]),
+      ...all.map((o) => [o.store_key, o.store_label]),
+    ]).entries(),
+  ].sort((a, b) => a[1].localeCompare(b[1], "nb"));
   $("store-filters").innerHTML = stores
     .map(
       ([id, name]) =>
@@ -296,40 +337,48 @@ function renderOffers() {
     .join("");
   const query = normalize($("offer-search").value),
     sort = $("sort-offers").value;
+  const rank = (o) => {
+    const c = comparison(o);
+    return c.safe && c.level !== "unknown" ? c.score : -Infinity;
+  };
   const offers = all
     .filter(
       (o) =>
         (!s.p.stores.length || s.p.stores.includes(o.store_key)) &&
         (!query || normalize(o.name + " " + o.store_label).includes(query)),
     )
-    .sort(
-      (a, b) =>
-        Number(b.manual || false) - Number(a.manual || false) ||
-        (sort === "price"
+    .sort((a, b) =>
+      sort === "value"
+        ? rank(b) - rank(a)
+        : sort === "price"
           ? (price(a.price) ?? Infinity) - (price(b.price) ?? Infinity)
           : sort === "store"
             ? a.store_label.localeCompare(b.store_label, "nb")
-            : a.name.localeCompare(b.name, "nb")),
+            : a.name.localeCompare(b.name, "nb"),
     );
   $("result-count").textContent =
-    `${offers.length} mattilbud · ${offers.filter((o) => o.manual && offerActive(o, s.stale)).length} egne tilbud innenfor dato`;
+    `${offers.length} tilbud som passer råvareregisteret · ${stores.length} kjeder i kilden`;
+  $("history-summary").textContent = s.meta.historyWeeks
+    ? `Prishistorikk: ${s.meta.historyWeeks} registrerte uker, fra ${String(s.meta.historyFrom).slice(0, 10)}. Årssammenligningen blir bedre etter hvert som flere uker legges til.`
+    : "Prishistorikk er ikke tilgjengelig ennå. Vurderingen bruker oppgitt førpris der kilden har det.";
   $("offers-grid").innerHTML = offers.length
     ? offers
         .map((o) => {
-          const active = offerActive(o, s.stale);
+          const c = comparison(o),
+            active = offerActive(o, s.stale) && c.safe;
           const state = o.manual
-            ? active
+            ? offerActive(o, s.stale)
               ? "Ditt tilbud"
               : "Utenfor dato"
-            : active
-              ? "Sjekk gyldighet"
-              : s.stale
-                ? "Arkiv"
+            : s.stale
+              ? "Arkiv"
+              : offerActive(o, s.stale)
+                ? "Sjekk gyldighet"
                 : "Kan ikke brukes nå";
-          return `<article class="offer-card${s.p.selected.includes(o.id) ? " is-selected" : ""}${s.p.excluded.includes(o.id) ? " is-excluded" : ""}"><div class="offer-flags"><span class="category-label">${html(o.category === "__top__" ? "Matvare" : o.category)}</span><span class="saving-label">${state}</span></div><h3 class="offer-title">${html(o.name)}</h3><p class="offer-quantity">${html(o.mengde || "Mengde ikke oppgitt")}</p><p class="offer-price">${typeof o.price === "number" ? money(o.price) : html(o.price || "Ukjent pris")}</p><p class="offer-store">${html(o.store_label)}</p>${o.manual ? `<p class="small-note">${html(o.validFrom)} til ${html(o.validUntil)}${o.member ? " · Din medlemspris" : ""}${o.sourceUrl ? ` · <a href="${html(o.sourceUrl)}" target="_blank" rel="noreferrer">Se kilde</a>` : ""}</p>` : ""}<div class="offer-actions"><button class="choose-offer" data-offer="${html(o.id)}" ${!active ? "disabled" : ""} aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter i planen"}</button><button class="exclude-offer" data-exclude="${html(o.id)}" aria-label="Ikke bruk ${html(o.name)}" aria-pressed="${s.p.excluded.includes(o.id)}">${s.p.excluded.includes(o.id) ? "↺" : "×"}</button></div>${o.manual ? `<button class="text-button" data-remove-offer="${o.id}">Slett mitt tilbud</button>` : ""}</article>`;
+          return `<article class="offer-card${s.p.selected.includes(o.id) ? " is-selected" : ""}${s.p.excluded.includes(o.id) ? " is-excluded" : ""}"><div class="offer-flags"><span class="category-label">${html(o.category === "__top__" ? "Matvare" : o.category)}</span><span class="saving-label">${state}</span></div><h3 class="offer-title">${html(o.name)}</h3><p class="offer-quantity">${html((o.mengde || "Mengde ikke oppgitt").replace(/førpris.*$/i, "").trim())}</p><p class="offer-price">${c.current ? money(c.current) : html(o.price || "Ukjent pris")}</p><p class="offer-store">${html(o.store_label)}</p>${offerComparison(o)}${o.manual ? `<p class="small-note">${html(o.validFrom)} til ${html(o.validUntil)}${o.member ? " · Din medlemspris" : ""}${o.sourceUrl ? ` · <a href="${html(o.sourceUrl)}" target="_blank" rel="noreferrer">Se kilde</a>` : ""}</p>` : ""}<div class="offer-actions"><button class="choose-offer" data-offer="${html(o.id)}" ${!active ? "disabled" : ""} aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter i planen"}</button><button class="exclude-offer" data-exclude="${html(o.id)}" aria-label="Ikke bruk ${html(o.name)}" aria-pressed="${s.p.excluded.includes(o.id)}">${s.p.excluded.includes(o.id) ? "↺" : "×"}</button></div>${o.manual ? `<button class="text-button" data-remove-offer="${o.id}">Slett mitt tilbud</button>` : ""}</article>`;
         })
         .join("")
-    : '<div class="empty-state"><h3>Ingen tilbud passer</h3><p>Prøv et annet søk eller legg inn et tilbud fra din butikk.</p></div>';
+    : '<div class="empty-state"><h3>Ingen tilbud passer</h3><p>Prøv et annet søk eller legg inn et tilbud fra en kjede.</p></div>';
 }
 function renderList() {
   const items = basket(s.p, s.offers, s.stale);
@@ -528,15 +577,16 @@ async function createProfile(data) {
   status("Profil opprettet og lagret. Ta vare på din personlige lenke.");
   render();
 }
-async function loadData() {
+async function loadData(force = false) {
   let data;
   for (const source of [
+    "/api/offers" + (force ? "?refresh=1" : ""),
     "https://raw.githubusercontent.com/Olewol/tilbudsavis/main/latest-data.json",
     "/latest-data.json",
   ]) {
     try {
       const response = await fetch(source, {
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(source.startsWith("/api/") ? 12000 : 5000),
         cache: "no-store",
         referrerPolicy: "no-referrer",
       });
@@ -544,9 +594,11 @@ async function loadData() {
       const candidate = await response.json();
       if (!Array.isArray(candidate.products)) continue;
       data = candidate;
-      s.source = source.startsWith("http")
-        ? "Hentet fra kilden"
-        : "Lagret kopi";
+      s.source = source.startsWith("/api/")
+        ? "Tilbud med lagret prishistorikk"
+        : source.startsWith("http")
+          ? "Hentet fra kilden · historikk utilgjengelig"
+          : "Lagret kopi";
       break;
     } catch {
       /* fallback */
@@ -559,6 +611,15 @@ async function loadData() {
   }
   const before = basket(s.p, s.offers, s.stale);
   s.meta = data.meta || {};
+  if (!s.meta.chains)
+    s.meta.chains = [
+      ...new Map(
+        data.products.map((o) => {
+          const c = chainInfo(o);
+          return [c.key, c];
+        }),
+      ).values(),
+    ];
   s.offers = cleanOffers(data.products);
   s.stale = staleData(s.meta);
   const checked = reconcileChecks(s.p, before, basket(s.p, s.offers, s.stale));
@@ -572,9 +633,12 @@ async function loadData() {
     : "ukjent dato";
   $("source-updated").textContent =
     `${s.source} · uke ${s.meta.week || "ukjent"} · oppdatert ${label}.`;
-  $("data-warning").textContent = s.stale
+  const warning = s.stale
     ? `Tilbudsgrunnlaget er gammelt (${label}). Det vises som arkiv og brukes ikke som dagens priser. Du kan fortsatt planlegge med tydelig merkede prisanslag.`
     : `Tilbudsgrunnlag fra ${label}. Sjekk dato, butikk og produkt i kundeavisen. Uten sikker pakningsstørrelse bruker vi et prisanslag i stedet.`;
+  $("data-warning").textContent = s.meta.sourceError
+    ? "Kilden kunne ikke oppdateres. Viser siste lagrede data. " + warning
+    : warning;
   render();
 }
 document.addEventListener("click", async (event) => {
@@ -923,7 +987,7 @@ $("retry-save").addEventListener("click", () => {
 $("refresh-data").addEventListener("click", async () => {
   $("refresh-data").disabled = true;
   try {
-    await loadData();
+    await loadData(true);
   } finally {
     $("refresh-data").disabled = false;
   }
@@ -955,6 +1019,25 @@ $("copy-list").addEventListener("click", () => {
   );
 });
 function setupNewFeatures() {
+  $("offer-week").addEventListener("click", () => {
+    s.p.planMode = "offers";
+    s.p.allowRepeats = true;
+    s.p.days = 7;
+    s.p.maxStores = 0;
+    s.p.stores = [];
+    syncControls();
+    generate();
+  });
+  $("plan-mode").addEventListener("change", () => {
+    s.p.planMode = $("plan-mode").value;
+    changed();
+    render();
+  });
+  $("allow-repeats").addEventListener("change", () => {
+    s.p.allowRepeats = $("allow-repeats").checked;
+    changed();
+  });
+
   for (const prefix of ["pantry", "offer"]) {
     $(prefix + "-ingredient").innerHTML = ingredientOptions();
     const update = () => {
@@ -988,6 +1071,9 @@ function setupNewFeatures() {
       name: $("offer-name").value.trim(),
       store: $("offer-store").value.trim(),
       price: Number($("offer-price").value),
+      ...($("offer-before").value
+        ? { beforePrice: Number($("offer-before").value) }
+        : {}),
       quantity: Number($("offer-quantity").value),
       validFrom: $("offer-from").value,
       validUntil: $("offer-until").value,
@@ -996,7 +1082,7 @@ function setupNewFeatures() {
     };
     if (!validManualOffer(offer)) {
       $("offer-error").textContent =
-        "Kontroller pris, mengde og datoer. Sluttdato må være lik eller etter startdato.";
+        "Kontroller pris, førpris, mengde og datoer. Førpris må være høyere enn tilbudspris. Sluttdato må være lik eller etter startdato.";
       return;
     }
     if (s.p.manualOffers.length >= 100) {
@@ -1006,12 +1092,13 @@ function setupNewFeatures() {
     }
     mutatePlan(() => {
       s.p.manualOffers.push(offer);
-      if (s.p.stores.length && !s.p.stores.includes(normalize(offer.store)))
-        s.p.stores.push(normalize(offer.store));
+      if (s.p.stores.length && !s.p.stores.includes(chainInfo(offer).key))
+        s.p.stores.push(chainInfo(offer).key);
     });
     $("offer-error").textContent = "";
     $("offer-name").value = "";
     $("offer-price").value = "";
+    $("offer-before").value = "";
     $("offer-source").value = "";
     $("offer-member").checked = false;
     render();

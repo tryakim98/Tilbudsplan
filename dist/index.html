@@ -119,6 +119,7 @@
           ><label
             ><span>Maks tilbudsbutikker</span
             ><select id="max-stores">
+              <option value="0">Alle kjeder</option>
               <option value="1">1 butikk</option>
               <option value="2" selected>2 butikker</option>
               <option value="3">3 butikker</option>
@@ -129,6 +130,12 @@
           </button>
         </div>
         <div class="planning-options">
+          <label
+            >Planlegg etter<select id="plan-mode">
+              <option value="taste">Smak og preferanser</option>
+              <option value="offers">Flest mulig varer på tilbud</option>
+            </select></label
+          >
           <label
             >Handlebudsjett for planen (kr)<input
               id="budget-input"
@@ -151,6 +158,21 @@
             Bruk det jeg har hjemme
           </button>
         </div>
+        <div class="list-toolbar">
+          <button class="secondary-button" id="offer-week">
+            Lag 7-dagers tilbudsuke med alle kjeder
+          </button>
+          <label class="check-label"
+            ><input type="checkbox" id="allow-repeats" />Tillat samme middag
+            flere ganger</label
+          >
+        </div>
+        <p class="small-note">
+          Tilbudsuke lager 7 middager, bruker alle kjeder og tillater
+          gjentakelser for å finne høy tilbudsandel. Du kan slå av gjentakelser
+          eller begrense antall butikker.
+        </p>
+        <p id="coverage-status" class="notice" hidden></p>
         <p id="budget-status" class="notice" hidden></p>
         <div id="plan-summary" class="plan-summary"></div>
         <div id="plan-empty" class="empty-state">
@@ -178,6 +200,7 @@
             <p class="section-kicker">Råvarene først</p>
             <h2 id="offers-heading">Tilbud som kan bli middag</h2>
             <p id="source-updated"></p>
+            <p id="history-summary" class="small-note"></p>
           </div>
           <button id="refresh-data" class="secondary-button">
             Oppdater tilbud
@@ -199,11 +222,11 @@
                 placeholder="F.eks. kyllingfilet 600 g"
             /></label>
             <label
-              >Butikk og sted<input
+              >Kjede<input
                 id="offer-store"
                 maxlength="80"
                 required
-                placeholder="F.eks. Kiwi Kråkerøy" /></label
+                placeholder="F.eks. Meny" /></label
             ><label
               >Pakningspris (kr)<input
                 id="offer-price"
@@ -212,6 +235,15 @@
                 max="10000"
                 step="0.01"
                 required
+            /></label>
+            <label
+              >Førpris per pakning (valgfritt)<input
+                id="offer-before"
+                type="number"
+                min="0.01"
+                max="10000"
+                step="0.01"
+                placeholder="Fra kundeavisen"
             /></label>
             <label
               >Mengde per pakning <span id="offer-unit"></span
@@ -253,10 +285,10 @@
                 placeholder="Kylling, brokkoli …"
             /></label>
             <fieldset>
-              <legend>Butikker i planen</legend>
+              <legend>Kjeder i planen</legend>
               <p class="small-note">
-                Ingen avkrysset betyr alle. Kontroller at tilbudet gjelder din
-                lokale butikk.
+                Ingen avkrysset betyr alle kjeder i kilden. Kontroller at
+                tilbudet gjelder din lokale butikk.
               </p>
               <div id="store-filters" class="filter-list"></div>
             </fieldset>
@@ -265,6 +297,12 @@
               <p>
                 Data fra Olewol/tilbudsavis, basert på eTilbudsavis.
                 Tilgjengelighet og lokal gyldighet er ikke verifisert.
+              </p>
+              <p>
+                Førpris er oppgitt i annonsen eller utledet fra «spar».
+                Tilbudssnittet regnes fra observerte tilbudsuker i samme kjede
+                og pakning siste 365 dager. Det er ikke et snitt av alle
+                butikkpriser.
               </p>
               <a
                 href="https://etilbudsavis.no/"
@@ -280,6 +318,7 @@
               <select id="sort-offers" aria-label="Sorter tilbud">
                 <option value="name">Varenavn</option>
                 <option value="price">Pris</option>
+                <option value="value">Best vurdert</option>
                 <option value="store">Butikk</option>
               </select>
             </div>

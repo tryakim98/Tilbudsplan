@@ -1,4 +1,5 @@
 import { INGREDIENTS, RECIPES, GOALS } from "./recipes.js";
+import { chainInfo } from "./offers.js";
 export const emptyProfile = (name = "Min kokebok") => ({
   name,
   saved: [],
@@ -21,8 +22,15 @@ export const emptyProfile = (name = "Min kokebok") => ({
   locked: [],
   customRecipes: [],
   manualOffers: [],
+  planMode: "taste",
+  allowRepeats: false,
 });
-export const withDefaults = (data) => ({ ...emptyProfile(), ...data });
+export const withDefaults = (data) => {
+  const p = { ...emptyProfile(), ...data };
+  if (Array.isArray(p.stores) && p.stores.every((x) => typeof x === "string"))
+    p.stores = [...new Set(p.stores.map((x) => chainInfo(x).key))];
+  return p;
+};
 export const catalog = (p) => [...RECIPES, ...(p.customRecipes || [])];
 export function localDate(now = new Date()) {
   return new Intl.DateTimeFormat("sv-SE", {
@@ -89,6 +97,8 @@ export function validManualOffer(o) {
     validDate(o.validUntil) &&
     o.validFrom <= o.validUntil &&
     typeof o.member === "boolean" &&
+    (o.beforePrice === undefined ||
+      (finite(o.beforePrice, 10000) && o.beforePrice > o.price)) &&
     text(o.sourceUrl || "", 1000) &&
     (!o.sourceUrl || /^https?:\/\//i.test(o.sourceUrl))
   );
@@ -120,7 +130,9 @@ export function validateProfile(raw) {
     !Number.isInteger(p.days) ||
     p.days < 1 ||
     p.days > 7 ||
-    ![1, 2, 3, 8].includes(p.maxStores)
+    ![0, 1, 2, 3, 8].includes(p.maxStores) ||
+    !["taste", "offers"].includes(p.planMode) ||
+    typeof p.allowRepeats !== "boolean"
   )
     return false;
   if (

@@ -6,6 +6,7 @@ import { Window } from "happy-dom";
 import worker, { validateProfile } from "../worker/index.js";
 import { emptyProfile } from "../dist/engine.js";
 import { localDate } from "../dist/model.js";
+import { RECIPES } from "../dist/recipes.js";
 const sql = new DatabaseSync(":memory:");
 sql.exec(
   readFileSync(
@@ -125,7 +126,10 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   await wait(30);
   assert.equal($("profile-name").textContent, "Testkjøkken");
   click('[data-view="cookbook"]');
-  assert.equal(document.querySelectorAll(".recipe-card").length, 16);
+  assert.equal(
+    document.querySelectorAll(".recipe-card").length,
+    RECIPES.length,
+  );
   click('[data-recipe="sticky-chicken"]');
   assert.ok($("recipe-detail").textContent.includes("Kyllingfilet"));
   click('[data-rate="5"]');
@@ -204,12 +208,14 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   $("offer-name").value = "Rispose";
   $("offer-store").value = "Nærbutikken";
   $("offer-price").value = "5";
+  $("offer-before").value = "20";
   $("offer-quantity").value = "200";
   $("offer-from").value = localDate();
   $("offer-until").value = localDate();
   submit("offer-form");
   assert.equal($("offer-error").textContent, "");
   assert.ok($("offers-grid").textContent.includes("Rispose"));
+  assert.ok($("offers-grid").textContent.includes("75 %"));
   click('[data-view="list"]');
   assert.ok(
     $("shopping-list").textContent.includes("Rispose"),
@@ -231,6 +237,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   assert.deepEqual(revised.data.locked, [0]);
   assert.equal(revised.data.pantry.rice, 150);
   assert.equal(revised.data.manualOffers[0].price, 5);
+  assert.equal(revised.data.manualOffers[0].beforePrice, 20);
   assert.equal(revised.data.budget, 1);
   assert.equal(revised.data.maxTime, 20);
   assert.ok($("save-status").textContent.includes("Lagret"));
@@ -285,5 +292,26 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   );
   assert.ok($("save-status").textContent.includes("Lagret"));
   globalThis.fetch = normalFetch;
+  click("#close-recipe");
+  click('[data-view="plan"]');
+  click("#offer-week");
+  assert.equal($("meal-count").value, "7");
+  assert.equal($("max-stores").value, "0");
+  assert.equal($("plan-mode").value, "offers");
+  assert.equal($("allow-repeats").checked, true);
+  await wait(500);
+  const week = (await (await api("GET", null, key)).json()).data;
+  assert.equal(week.plan.length, 7);
+  assert.equal(week.planMode, "offers");
+  assert.equal(week.allowRepeats, true);
+  assert.deepEqual(week.stores, []);
+  assert.deepEqual(week.locked, [0]);
+  $("allow-repeats").checked = false;
+  change($("allow-repeats"));
+  await wait(500);
+  assert.equal(
+    (await (await api("GET", null, key)).json()).data.allowRepeats,
+    false,
+  );
   await window.happyDOM.close();
 });

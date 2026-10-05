@@ -1,4 +1,5 @@
 import { validateProfile, withDefaults } from "../dist/model.js";
+import { readOffers, refreshOffers } from "./offers.js";
 export { validateProfile };
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -26,6 +27,42 @@ function db(env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/offers" && request.method === "GET") {
+      try {
+        return json(
+          await readOffers(
+            env,
+            JSON.parse(ASSETS["/latest-data.json"].body),
+            url.searchParams.has("refresh"),
+          ),
+        );
+      } catch (error) {
+        console.error("Offer history unavailable", error.message);
+        return json(
+          { error: "Tilbudshistorikken kunne ikke lastes. Prøv igjen." },
+          503,
+        );
+      }
+    }
+    if (url.pathname === "/api/offers/refresh") {
+      if (request.method !== "POST")
+        return json({ error: "Metoden støttes ikke" }, 405);
+      const key = request.headers.get("authorization")?.replace(/^Bearer /, "");
+      if (!env.OFFERS_UPDATE_KEY || key !== env.OFFERS_UPDATE_KEY)
+        return json({ error: "Oppdatering krever tilgang" }, 401);
+      try {
+        return json(await refreshOffers(env));
+      } catch (error) {
+        console.error("Offer collection failed", error.message);
+        return json(
+          {
+            error:
+              "Kilden eller lagringen er utilgjengelig. Historikken er beholdt.",
+          },
+          503,
+        );
+      }
+    }
     if (url.pathname.startsWith("/api/")) {
       if (url.pathname !== "/api/profile")
         return json({ error: "Ukjent adresse" }, 404);
