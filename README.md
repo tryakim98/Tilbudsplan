@@ -10,6 +10,7 @@ Tilbud, personlig kokebok og en praktisk middagsuke. Videreutviklet fra prototyp
 - «Lag 7-dagers tilbudsuke med alle kjeder» prioriterer andelen varer med brukbar tilbudspris. Gjentatte middager kan tillates eller slås av. Visning av faktisk tilbudsandel, med et mål på minst 80 %, og alle varer uten tilbud i handlelisten. Andelen teller ulike råvarer som må kjøpes, ikke kilo eller andel av budsjettet.
 - Tilbud viser pakningspris, oppgitt eller utledet førpris, rabatt i kroner og prosent, og en begrunnet vurdering. Kjedene vises uten filialnavn, og alle kjeder i kilden kan brukes.
 - Varig ukentlig prishistorikk i D1, tilbakefylling av tilgjengelige arkiver og rullerende sammenligning av samme produkt, kjede og pakning siste 365 dager. Manglende uker regnes ikke som normalpriser.
+- Nye kildeuker arkiveres når appen åpnes med en gyldig personlig profil. Anonyme besøk kan lese tilbudene. Innsamling mens appen er lukket krever en aktiv planlagt oppgave; det beskyttede skrivekallet er klart for dette.
 - Egne oppskrifter med strukturerte råvarer, mengder, trinn, kategorier, redigering og tekst som kan deles med venner. Inntil 50 egne oppskrifter per profil.
 - Råvarer hjemme trekkes fra det samlede handlebehovet. «Hva kan jeg lage av dette?» finner retter som mangler høyst tre råvarer.
 - Budsjett for hele planen, maksimal tilberedningstid og middager som kan låses før resten av planen byttes. Budsjettet er et søkemål; appen sier fra når det ikke nås.

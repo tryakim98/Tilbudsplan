@@ -29,11 +29,24 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/api/offers" && request.method === "GET") {
       try {
+        const profileKey = request.headers
+          .get("authorization")
+          ?.replace(/^Bearer /, "");
+        const canCollect =
+          validKey(profileKey) &&
+          !!(await db(env)
+            .prepare("SELECT key_hash FROM profiles WHERE key_hash = ?")
+            .bind(await hash(profileKey))
+            .first());
         return json(
           await readOffers(
             env,
-            JSON.parse(ASSETS["/latest-data.json"].body),
+            typeof ASSETS === "undefined"
+              ? null
+              : JSON.parse(ASSETS["/latest-data.json"].body),
             url.searchParams.has("refresh"),
+            new Date(),
+            canCollect,
           ),
         );
       } catch (error) {

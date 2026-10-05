@@ -74,17 +74,25 @@ async function readJson(url) {
   if (body.length > 1500000) throw new Error("Kildedata er for store");
   return JSON.parse(body);
 }
-export async function refreshOffers(env, now = new Date()) {
-  const current = await readJson(SOURCE);
+export async function refreshOffers(
+  env,
+  now = new Date(),
+  trustedCurrent = null,
+) {
+  // trustedCurrent is only supplied by the server after fetching the fixed SOURCE.
+  const current = trustedCurrent || (await readJson(SOURCE));
   if (!validSnapshot(current, now))
     throw new Error("Kilden har ugyldig dato eller data");
   const prior = await env.DB.prepare(
-    "SELECT period FROM offer_snapshots",
-  ).all();
+    "SELECT period FROM offer_snapshots WHERE generated >= ?",
+  )
+    .bind(new Date(now.valueOf() - 365 * dayMs).toISOString().slice(0, 10))
+    .all();
   const snapshots = [current];
   let archiveErrors = 0;
   // Retry missing archives on later collections after partial source failures.
   const known = new Set(prior.results.map((r) => r.period));
+  known.add(isoPeriod(current.meta.generated));
   const [year, currentWeek] = isoPeriod(current.meta.generated)
     .split("-W")
     .map(Number);
@@ -156,23 +164,40 @@ export async function readOffers(
   fallback,
   force = false,
   now = new Date(),
+  canCollect = false,
 ) {
   const cutoff = new Date(now.valueOf() - 365 * dayMs)
     .toISOString()
     .slice(0, 10);
-  const rows = await env.DB.prepare(
-    "SELECT generated,payload FROM offer_snapshots WHERE generated >= ? ORDER BY generated DESC LIMIT 54",
-  )
-    .bind(cutoff)
-    .all();
-  const snapshots = rows.results.map((r) => JSON.parse(r.payload));
+  const loadSnapshots = async () => {
+    const rows = await env.DB.prepare(
+      "SELECT generated,payload FROM offer_snapshots WHERE generated >= ? ORDER BY generated DESC LIMIT 54",
+    )
+      .bind(cutoff)
+      .all();
+    return rows.results.map((r) => JSON.parse(r.payload));
+  };
+  let snapshots = await loadSnapshots();
   let current = snapshots[0],
-    sourceError = false;
+    sourceError = false,
+    historyError = false;
   if (!current || force || now - new Date(current.meta.generated) > dayMs) {
     try {
       const data = await readJson(SOURCE);
       if (!validSnapshot(data, now)) throw new Error("Invalid source");
-      current = data;
+      const newer =
+        !current ||
+        new Date(data.meta.generated) > new Date(current.meta.generated);
+      if (newer || !current || data.meta.generated === current.meta.generated)
+        current = data;
+      if (canCollect && (newer || force)) {
+        try {
+          await refreshOffers(env, now, data);
+          snapshots = await loadSnapshots();
+        } catch {
+          historyError = true;
+        }
+      }
     } catch {
       sourceError = true;
       current = current || fallback;
@@ -200,6 +225,7 @@ export async function readOffers(
       historyFrom: snapshots.at(-1)?.meta.generated || null,
       chains,
       sourceError,
+      historyError,
     },
     products,
   };

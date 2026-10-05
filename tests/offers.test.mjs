@@ -284,6 +284,7 @@ test("authenticated collection persists archives, deduplicates weeks and survive
   };
   const actualFetch = globalThis.fetch;
   let failArchiveOnce = true;
+  let additionalArchive = false;
   globalThis.fetch = async (url) => {
     if (String(url).includes("data_uke40") && failArchiveOnce) {
       failArchiveOnce = false;
@@ -292,12 +293,18 @@ test("authenticated collection persists archives, deduplicates weeks and survive
     return new Response(
       JSON.stringify(
         String(url).includes("api.github")
-          ? [{ name: "data_uke39.json" }, { name: "data_uke40.json" }]
+          ? [
+              { name: "data_uke39.json" },
+              { name: "data_uke40.json" },
+              ...(additionalArchive ? [{ name: "data_uke38.json" }] : []),
+            ]
           : String(url).includes("data_uke39")
             ? snap("2026-09-21", [offer({ price: "60", merknad: "" })])
             : String(url).includes("data_uke40")
               ? snap("2026-09-28", [offer({ price: "80", merknad: "" })])
-              : snap("2026-10-05", [offer()]),
+              : String(url).includes("data_uke38")
+                ? snap("2026-09-14", [offer({ price: "70", merknad: "" })])
+                : snap("2026-10-05", [offer()]),
       ),
       { headers: { "content-type": "application/json" } },
     );
@@ -332,13 +339,42 @@ test("authenticated collection persists archives, deduplicates weeks and survive
     assert.equal(read.products[0].history.mean, 70);
     assert.equal(read.products[0].history.weeks, 2);
     assert.equal(read.meta.chains[0].label, "Meny");
+    additionalArchive = true;
+    const get = (key) =>
+      worker.fetch(
+        new Request("https://test.local/api/offers?refresh=1", {
+          headers: key ? { authorization: "Bearer " + key } : {},
+        }),
+        env,
+      );
+    assert.equal((await (await get()).json()).meta.historyWeeks, 3);
+    assert.equal(
+      (await (await get("0".repeat(48))).json()).meta.historyWeeks,
+      3,
+    );
+    const created = await worker.fetch(
+      new Request("https://test.local/api/profile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(emptyProfile("Historikk-test")),
+      }),
+      env,
+    );
+    assert.equal(created.status, 201);
+    const key = (await created.json()).key;
+    const collected = await get(key);
+    assert.equal(collected.status, 200);
+    const recorded = await collected.json();
+    assert.equal(recorded.meta.historyWeeks, 4);
+    assert.equal(recorded.meta.historyError, false);
+    assert.equal(recorded.products[0].history.weeks, 3);
     globalThis.fetch = async () => {
       throw Error("Offline");
     };
     await assert.rejects(refreshOffers(env, now));
     assert.equal(
       sql.prepare("SELECT COUNT(*) AS n FROM offer_snapshots").get().n,
-      3,
+      4,
     );
     const cached = await readOffers(env, null, true, now);
     assert.equal(cached.meta.sourceError, true);

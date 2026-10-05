@@ -359,7 +359,7 @@ function renderOffers() {
   $("result-count").textContent =
     `${offers.length} tilbud som passer råvareregisteret · ${stores.length} kjeder i kilden`;
   $("history-summary").textContent = s.meta.historyWeeks
-    ? `Prishistorikk: ${s.meta.historyWeeks} registrerte uker, fra ${String(s.meta.historyFrom).slice(0, 10)}. Årssammenligningen blir bedre etter hvert som flere uker legges til.`
+    ? `Prishistorikk: ${s.meta.historyWeeks} registrerte uker, fra ${String(s.meta.historyFrom).slice(0, 10)}. Nye uker samles når du åpner appen med din profil. Årssammenligningen blir bedre etter hvert som flere uker legges til.`
     : "Prishistorikk er ikke tilgjengelig ennå. Vurderingen bruker oppgitt førpris der kilden har det.";
   $("offers-grid").innerHTML = offers.length
     ? offers
@@ -576,6 +576,7 @@ async function createProfile(data) {
   syncControls();
   status("Profil opprettet og lagret. Ta vare på din personlige lenke.");
   render();
+  void loadData();
 }
 async function loadData(force = false) {
   let data;
@@ -586,6 +587,9 @@ async function loadData(force = false) {
   ]) {
     try {
       const response = await fetch(source, {
+        ...(source.startsWith("/api/") && s.key
+          ? { headers: { authorization: "Bearer " + s.key } }
+          : {}),
         signal: AbortSignal.timeout(source.startsWith("/api/") ? 12000 : 5000),
         cache: "no-store",
         referrerPolicy: "no-referrer",
@@ -639,6 +643,9 @@ async function loadData(force = false) {
   $("data-warning").textContent = s.meta.sourceError
     ? "Kilden kunne ikke oppdateres. Viser siste lagrede data. " + warning
     : warning;
+  if (s.meta.historyError)
+    $("data-warning").textContent +=
+      " Nye priser kunne ikke lagres i historikken. Tidligere uker er beholdt.";
   render();
 }
 document.addEventListener("click", async (event) => {
