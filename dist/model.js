@@ -17,16 +17,19 @@ export const emptyProfile = (name = "Min kokebok") => ({
   appChains: [],
   planBasis: null,
   servings: 2,
-  days: 5,
-  maxStores: 2,
+  days: 7,
+  maxStores: 0,
   pantry: {},
   budget: 0,
   maxTime: 0,
   locked: [],
   customRecipes: [],
+  generatedRecipes: [],
   manualOffers: [],
-  planMode: "taste",
+  planMode: "luxury",
   allowRepeats: false,
+  preferOrganic: true,
+  preferVariety: true,
 });
 export const withDefaults = (data) => {
   const p = { ...emptyProfile(), ...data };
@@ -34,7 +37,11 @@ export const withDefaults = (data) => {
     p.stores = [...new Set(p.stores.map((x) => chainInfo(x).key))];
   return p;
 };
-export const catalog = (p) => [...RECIPES, ...(p.customRecipes || [])];
+export const catalog = (p) => [
+  ...RECIPES,
+  ...(p.customRecipes || []),
+  ...(p.generatedRecipes || []),
+];
 const osloDate = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Europe/Oslo",
   year: "numeric",
@@ -107,6 +114,19 @@ export function validManualOffer(o) {
     (!o.sourceUrl || /^https?:\/\//i.test(o.sourceUrl))
   );
 }
+export function validGeneratedRecipe(r) {
+  return (
+    object(r) &&
+    /^offer-[a-f0-9]{16}$/.test(r.id || "") &&
+    validCustomRecipe({ ...r, id: "custom-" + r.id.slice(6) }) &&
+    r.createdByOffers === true &&
+    text(r.style, 30) &&
+    Object.hasOwn(INGREDIENTS, r.main) &&
+    Array.isArray(r.sourceOfferIds) &&
+    r.sourceOfferIds.length <= 20 &&
+    r.sourceOfferIds.every((id) => text(id, 300))
+  );
+}
 export function validateProfile(raw) {
   if (!object(raw)) return false;
   const p = withDefaults(raw);
@@ -137,8 +157,10 @@ export function validateProfile(raw) {
     p.days < 1 ||
     p.days > 7 ||
     ![0, 1, 2, 3, 8].includes(p.maxStores) ||
-    !["taste", "offers", "discounts"].includes(p.planMode) ||
-    typeof p.allowRepeats !== "boolean"
+    !["taste", "offers", "discounts", "luxury"].includes(p.planMode) ||
+    typeof p.allowRepeats !== "boolean" ||
+    typeof p.preferOrganic !== "boolean" ||
+    typeof p.preferVariety !== "boolean"
   )
     return false;
   if (
@@ -185,6 +207,13 @@ export function validateProfile(raw) {
     !Array.isArray(p.manualOffers) ||
     p.manualOffers.length > 100 ||
     !p.manualOffers.every(validManualOffer)
+  )
+    return false;
+  if (
+    !Array.isArray(p.generatedRecipes) ||
+    p.generatedRecipes.length > 100 ||
+    !p.generatedRecipes.every(validGeneratedRecipe) ||
+    new Set(catalog(p).map((r) => r.id)).size !== catalog(p).length
   )
     return false;
   const ids = new Set(catalog(p).map((r) => r.id));

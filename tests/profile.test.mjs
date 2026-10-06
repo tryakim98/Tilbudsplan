@@ -6,7 +6,26 @@ import { Window } from "happy-dom";
 import worker, { validateProfile } from "../worker/index.js";
 import { emptyProfile } from "../dist/engine.js";
 import { localDate } from "../dist/model.js";
-import { RECIPES } from "../dist/recipes.js";
+import { RECIPES, INGREDIENTS } from "../dist/recipes.js";
+function freshOffersFixture() {
+  const products = Object.entries(INGREDIENTS)
+    .filter(([, item]) => item[5].length)
+    .map(([id, item]) => ({
+      id: "fixture-" + id,
+      name: item[5][0],
+      price: item[3],
+      beforePrice: item[3] * 1.5,
+      store: "Meny",
+      store_key: "meny",
+      structured: true,
+      currency: "NOK",
+      sourcePack: { quantity: item[2], unit: item[1] },
+      mengde: item[2] + " " + item[1],
+      validFrom: localDate(),
+      validUntil: localDate(),
+    }));
+  return { meta: { generated: new Date().toISOString(), week: 41 }, products };
+}
 const sql = new DatabaseSync(":memory:");
 sql.exec(
   readFileSync(
@@ -95,9 +114,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
       configurable: true,
     });
   globalThis.confirm = () => true;
-  const offersFixture = JSON.parse(
-    readFileSync(new URL("../dist/latest-data.json", import.meta.url), "utf8"),
-  );
+  const offersFixture = freshOffersFixture();
   const completeCoverage = {
     complete: true,
     surveyedChains: 18,
@@ -221,7 +238,11 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   change(chicken);
   click("#quick-plan");
   await wait(100);
-  assert.equal(document.querySelectorAll(".meal-card").length, 5);
+  assert.equal(document.querySelectorAll(".meal-card").length, 7);
+  assert.equal($("weekly-shopping-cta").hidden, false);
+  click("#open-weekly-list");
+  assert.ok($("list-view").classList.contains("is-active"));
+  assert.ok($("list-week-summary").textContent.includes("7 middager"));
   assert.ok(!$("meal-plan").textContent.includes("Soyakylling"));
   click('[data-view="list"]');
   assert.ok(document.querySelectorAll(".shopping-item").length > 5);
@@ -231,9 +252,30 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   assert.ok(document.querySelector(".is-checked"));
   await wait(450);
   const saved = await (await api("GET", null, key)).json();
-  assert.equal(saved.data.plan.length, 5);
+  assert.equal(saved.data.plan.length, 7);
   assert.equal(saved.data.checked.length, 1);
   assert.ok(saved.data.dislikes.includes("chicken"));
+  const generatedId = saved.data.plan.find((id) => id.startsWith("offer-"));
+  assert.ok(generatedId);
+  click('[data-view="plan"]');
+  click('[data-recipe="' + generatedId + '"]');
+  click('[data-rate="4"]');
+  $("recipe-note").value = "Denne tilbudsretten vil jeg beholde";
+  $("recipe-note").dispatchEvent(new window.Event("input", { bubbles: true }));
+  click("#save-note");
+  click("#close-recipe");
+  await wait(450);
+  const keptRecipe = (await (await api("GET", null, key)).json()).data;
+  assert.ok(keptRecipe.saved.includes(generatedId));
+  assert.equal(keptRecipe.ratings[generatedId], 4);
+  assert.equal(
+    keptRecipe.notes[generatedId],
+    "Denne tilbudsretten vil jeg beholde",
+  );
+  assert.ok(
+    keptRecipe.generatedRecipes.find((r) => r.id === generatedId).steps
+      .length >= 4,
+  );
   const submit = (id) =>
     $(id).dispatchEvent(
       new window.Event("submit", { bubbles: true, cancelable: true }),
@@ -259,6 +301,11 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   const customId =
     document.querySelector("[data-edit-recipe]").dataset.editRecipe;
   assert.ok($("recipe-detail").textContent.includes("Restepanne"));
+  click("#close-recipe");
+  click('[data-view="plan"]');
+  click('[data-remove-meal="0"]');
+  click('[data-view="cookbook"]');
+  click('[data-recipe="' + customId + '"]');
   click('[data-add="' + customId + '"]');
   click("#close-recipe");
   click('[data-view="plan"]');
@@ -277,6 +324,15 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
     "Restepanne",
   );
   assert.ok($("budget-status").textContent.includes("over budsjettet"));
+  const retainedPlan = $("meal-plan").innerHTML;
+  click("#generate-plan");
+  await wait(100);
+  assert.equal($("meal-plan").innerHTML, retainedPlan);
+  assert.ok(
+    $("planning-feedback").textContent.includes(
+      "Den eksisterende planen er beholdt",
+    ),
+  );
   click('[data-view="offers"]');
   $("offer-ingredient").value = "rice";
   $("offer-name").value = "Rispose";
@@ -372,16 +428,22 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   globalThis.fetch = normalFetch;
   click("#close-recipe");
   click('[data-view="plan"]');
+  $("budget-input").value = "1500";
+  change($("budget-input"));
+  $("max-time").value = "0";
+  change($("max-time"));
   click("#offer-week");
   assert.equal($("meal-count").value, "7");
   assert.equal($("max-stores").value, "0");
-  assert.equal($("plan-mode").value, "discounts");
-  assert.equal($("allow-repeats").checked, true);
+  assert.equal($("plan-mode").value, "luxury");
+  assert.equal($("allow-repeats").checked, false);
   await wait(500);
+  // CPU-bound planning can finish after the initial timer was due; wait for the subsequent save debounce.
+  await wait(450);
   const week = (await (await api("GET", null, key)).json()).data;
-  assert.equal(week.plan.length, 7);
-  assert.equal(week.planMode, "discounts");
-  assert.equal(week.allowRepeats, true);
+  assert.equal(week.plan.length, 7, $("planning-feedback").textContent);
+  assert.equal(week.planMode, "luxury");
+  assert.equal(week.allowRepeats, false);
   assert.deepEqual(week.stores, []);
   assert.deepEqual(week.locked, [0]);
   $("allow-repeats").checked = false;
@@ -394,7 +456,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   click("#refresh-data");
   await wait(100);
   assert.equal(forcedCollection, true);
-  // Collection must finish before generation, and a count gap must not silently generate.
+  // All pages must finish before planning. Metadata gaps are disclosed and do not strand the user.
   const prior = $("meal-plan").innerHTML;
   let finish;
   releaseCollection = new Promise((resolve) => {
@@ -410,16 +472,10 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   finish();
   releaseCollection = null;
   await wait(100);
-  assert.equal($("meal-plan").innerHTML, prior);
-  assert.equal($("partial-plan").hidden, false);
+  assert.equal($("partial-plan").hidden, true);
   assert.ok($("collection-status").textContent.includes("ufullstendig"));
-  click("#partial-plan");
-  await wait(100);
-  assert.ok(
-    $("plan-data-basis").textContent.includes(
-      "etter ditt valg med ufullstendig",
-    ),
-  );
+  await wait(500);
+  assert.ok($("plan-data-basis").textContent.includes("ufullstendig"));
   const partialPlan = $("meal-plan").innerHTML;
   sourceStatus = "error";
   click("#generate-plan");
@@ -464,9 +520,7 @@ test("UI: reload resumes unfinished collection; an older partial result is reche
       value: name === "window" ? window : window[name],
       configurable: true,
     });
-  const fixture = JSON.parse(
-    readFileSync(new URL("../dist/latest-data.json", import.meta.url), "utf8"),
-  );
+  const fixture = freshOffersFixture();
   const id = "22222222-2222-4222-8222-222222222222";
   const key = "b".repeat(48);
   sessionStorage.setItem(
@@ -560,7 +614,7 @@ test("UI: reload resumes unfinished collection; an older partial result is reche
   await wait(100);
   assert.equal(starts, 1, "older data must trigger a fresh coverage check");
   assert.equal(steps, 2);
-  assert.equal(document.querySelectorAll(".meal-card").length, 5);
+  assert.equal(document.querySelectorAll(".meal-card").length, 7);
   assert.ok(
     document
       .getElementById("plan-data-basis")

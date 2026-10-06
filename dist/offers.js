@@ -208,6 +208,22 @@ export function comparison(o, history = o.history) {
     explanation,
   };
 }
+export function isAdvertisedOffer(o) {
+  if (o.manual) return true;
+  const c = comparison(o);
+  if ((c.before && c.before > c.current) || o.advertisedDiscount > 0)
+    return true;
+  return !/fast(?:e)? lav(?:e)? pris|alltid billigere|faste knallkjop/i.test(
+    normalizeText(o.name + " " + (o.mengde || "")),
+  );
+}
+export function declaredOrganic(o) {
+  const text = String(o.name || "") + " " + String(o.mengde || "");
+  return (
+    /økologisk\w*\b|\borganic\b|øko\b/i.test(text) &&
+    !/ikke[\s-]+økologisk|not[\s-]+organic/i.test(text)
+  );
+}
 export function productKey(o) {
   const pack = packInfo(o);
   if (!pack || !priceBasis(o).safe || o.manual) return null;

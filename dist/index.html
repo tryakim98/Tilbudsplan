@@ -24,6 +24,9 @@
       >
       <div class="top-meta">
         <span class="public-label">Ingen innlogging</span>
+        <button class="header-button" data-view="list" id="header-shopping">
+          Ukas handleliste
+        </button>
         <span id="profile-name">Prøv uten profil</span
         ><button class="header-button" data-view="profile">
           Min matprofil
@@ -33,11 +36,16 @@
     <main>
       <section class="intro">
         <div>
-          <p class="section-kicker">Din middagsuke</p>
-          <h1>Mat du gleder deg til.</h1>
-          <p>Tilbud som passer smaken din. Oppskrifter du vil lage igjen.</p>
+          <p class="section-kicker">Ukens tilbud bestemmer menyen</p>
+          <h1>God mat. Små priser.</h1>
+          <p>
+            Vi henter tilbudene først, finner gode råvarer til hyggelige priser
+            og bygger middagsuka rundt dem. Målet er minst 80 % av handlevarene
+            fra tilbudsavisene.
+          </p>
           <div class="intro-actions">
-            <button class="primary-button" id="quick-plan">Planlegg uka</button
+            <button class="primary-button" id="quick-plan">
+              Hent tilbud og lag uka</button
             ><button class="text-button" data-view="cookbook">
               Finn en ny favoritt
             </button>
@@ -103,7 +111,7 @@
           Tilbud <b id="selected-count-badge">0</b>
         </button>
         <button class="flow-tab" data-view="list">
-          Handleliste <b id="list-count-badge">0</b>
+          Ukas handleliste <b id="list-count-badge">0</b>
         </button>
         <button class="flow-tab" data-view="cookbook">
           Kokeboka <b id="saved-count-badge">0</b>
@@ -119,10 +127,10 @@
         <div class="view-heading">
           <div>
             <p class="section-kicker">Hva skal vi ha til middag?</p>
-            <h2 id="plan-heading">En uke som passer deg</h2>
+            <h2 id="plan-heading">Menyen begynner i tilbudsavisen</h2>
             <p id="plan-context">
-              Velg antall middager og porsjoner. Matprofilen din styrer
-              forslagene.
+              Først tilbud. Så retter som passer råvarene, smaken din og
+              budsjettet.
             </p>
           </div>
         </div>
@@ -134,9 +142,9 @@
               <option>2</option>
               <option>3</option>
               <option>4</option>
-              <option selected>5</option>
+              <option>5</option>
               <option>6</option>
-              <option>7</option>
+              <option selected>7</option>
             </select></label
           ><label
             ><span>Porsjoner</span
@@ -152,19 +160,20 @@
           ><label
             ><span>Maks tilbudsbutikker</span
             ><select id="max-stores">
-              <option value="0">Alle kjeder</option>
+              <option value="0" selected>Alle kjeder</option>
               <option value="1">1 butikk</option>
-              <option value="2" selected>2 butikker</option>
+              <option value="2">2 butikker</option>
               <option value="3">3 butikker</option>
               <option value="8">Inntil 8 butikker</option>
             </select></label
           ><button id="generate-plan" class="primary-button">
-            Lag ny kombinasjon
+            Hent tilbud og lag meny
           </button>
         </div>
         <div class="planning-options">
           <label
             >Planlegg etter<select id="plan-mode">
+              <option value="luxury">God mat billig · små luksusfunn</option>
               <option value="taste">Smak og preferanser</option>
               <option value="offers">Flest mulig varer på tilbud</option>
               <option value="discounts">Beste dokumenterte rabatter</option>
@@ -177,7 +186,7 @@
               min="0"
               max="10000"
               step="10"
-              placeholder="Valgfritt"
+              placeholder="F.eks. 600 for to"
           /></label>
           <label
             >Maks tid per middag<select id="max-time">
@@ -193,8 +202,16 @@
           </button>
         </div>
         <div class="list-toolbar">
+          <label class="check-label"
+            ><input type="checkbox" id="prefer-organic" checked />Velg økologisk
+            ved liten prisforskjell</label
+          >
+          <label class="check-label"
+            ><input type="checkbox" id="prefer-variety" checked />Varier råvarer
+            og tilberedning</label
+          >
           <button class="secondary-button" id="offer-week">
-            Lag 7-dagers tilbudsuke med alle kjeder
+            Lag 7 varierte middager fra alle kjeder
           </button>
           <label class="check-label"
             ><input type="checkbox" id="allow-repeats" />Tillat samme middag
@@ -202,24 +219,40 @@
           >
         </div>
         <p class="small-note">
-          Tilbudsuke lager 7 middager, bruker alle kjeder og tillater
-          gjentakelser. Alle tilbud hentes og kontrolleres før planen lages.
-          Større dokumentert prosentavslag prioriteres etter tilbudsandelen.
-          Store pakker kan koste mer; sjekk handleanslaget og sett gjerne
-          budsjett.
+          Nye retter bygges fra de innsamlede tilbudene når utvalget trenger
+          det. Økologisk må stå i kilden; vi velger det ved inntil 10 %
+          prisforskjell og innenfor budsjettet. Budsjettet gjelder hele
+          innkjøpet til middagene, også rester i pakningene.
         </p>
+        <div id="deal-start" class="deal-start"></div>
+        <p
+          id="planning-feedback"
+          class="notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
         <p id="coverage-status" class="notice" hidden></p>
         <p id="plan-data-basis" class="small-note" hidden></p>
         <p id="budget-status" class="notice" hidden></p>
         <div id="plan-summary" class="plan-summary"></div>
+        <div id="weekly-shopping-cta" class="weekly-shopping-cta" hidden>
+          <div>
+            <strong>Handlelisten for hele uka er klar</strong
+            ><span id="shopping-cta-detail"></span>
+          </div>
+          <button class="primary-button" data-view="list" id="open-weekly-list">
+            Åpne ukas handleliste
+          </button>
+        </div>
         <div id="plan-empty" class="empty-state">
-          <h3>Begynn med det du liker</h3>
+          <h3>Begynn med ukas gode kjøp</h3>
           <p>
-            Lag et forslag med én gang, eller velg preferanser i matprofilen
-            først.
+            Hent alle tilgjengelige tilbud. Vi setter sammen retter etter
+            råvarene og lager nye oppskrifter der det trengs.
           </p>
           <button class="primary-button" id="first-plan">
-            Lag middagsforslag
+            Hent tilbud og lag meny
           </button>
         </div>
         <div id="meal-plan" class="meal-plan"></div>
@@ -227,7 +260,7 @@
           <button class="secondary-button" data-view="profile">
             Tilpass smaken</button
           ><button class="primary-button" data-view="list">
-            Se handlelisten
+            Åpne ukas handleliste
           </button>
         </div>
       </section>
@@ -385,7 +418,8 @@
         <div class="view-heading">
           <div>
             <p class="section-kicker">Før du går i butikken</p>
-            <h2 id="list-heading">Én liste. Hele middagsuka.</h2>
+            <h2 id="list-heading">Ukas handleliste</h2>
+            <p id="list-week-summary"></p>
             <p>
               Samlede mengder minus råvarene på kjøkkenet ditt. Kryss av det du
               har handlet.
@@ -397,7 +431,9 @@
         <p class="small-note">
           Handleanslaget regner hele pakninger, også olje og krydder. Prisene
           uten tilbud er illustrerende anslag, ikke kontrollerte butikkpriser.
-          Salt, pepper og vann regnes som basis hjemme.
+          Salt og pepper står i listen når oppskriften krever det. Registrer det
+          du har hjemme for å trekke det fra. Vann regnes ikke som en
+          handlevare.
         </p>
         <div class="list-toolbar">
           <button class="secondary-button" data-view="pantry">

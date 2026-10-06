@@ -7,9 +7,7 @@ import {
   cleanOffers,
   eligible,
   availableOffers,
-  storePool,
-  recipeScore,
-  makePlan,
+  packageSize,
   basket,
   recipeEstimate,
   catalog,
@@ -26,8 +24,14 @@ import {
   validManualOffer,
   validateProfile,
 } from "./model.js";
-import { chainInfo, comparison } from "./offers.js";
+import { chainInfo, comparison, isAdvertisedOffer } from "./offers.js";
 import { createOfferCollector } from "./collection-client.js";
+import {
+  OFFER_TARGET,
+  planFromOffers,
+  keepGeneratedRecipes,
+  offerTraits,
+} from "./offer-planner.js";
 const offerCollector = createOfferCollector();
 const $ = (id) => document.getElementById(id);
 const html = (s = "") =>
@@ -59,6 +63,7 @@ const s = {
   variation: 0,
   source: "",
   collecting: false,
+  planning: false,
   collection: null,
   pendingPartial: false,
   offerPage: 0,
@@ -183,6 +188,7 @@ function view(name) {
       : e.removeAttribute("aria-current");
   });
   render();
+  $(name + "-view")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
 }
 function syncControls() {
   $("meal-count").value = String(s.p.days);
@@ -190,6 +196,8 @@ function syncControls() {
   $("max-stores").value = String(s.p.maxStores);
   $("plan-mode").value = s.p.planMode;
   $("allow-repeats").checked = s.p.allowRepeats;
+  $("prefer-organic").checked = s.p.preferOrganic;
+  $("prefer-variety").checked = s.p.preferVariety;
   $("budget-input").value = s.p.budget || "";
   $("max-time").value = String(s.p.maxTime);
   $("name-input").value = s.key ? s.p.name : "";
@@ -205,6 +213,9 @@ function counts() {
   $("list-count-badge").textContent = basket(s.p, s.offers, s.stale).filter(
     (i) => i.need > 0 && !s.p.checked.includes(i.id),
   ).length;
+  $("header-shopping").textContent =
+    "Ukas handleliste" +
+    (s.p.plan.length ? " · " + $("list-count-badge").textContent : "");
 }
 function render() {
   counts();
@@ -236,12 +247,12 @@ function scaledStep(step) {
 function recipeActions(r) {
   return `<div class="recipe-actions"><button class="secondary-button" data-recipe="${r.id}">Se oppskrift</button><button class="save-button" data-save="${r.id}" aria-pressed="${s.p.saved.includes(r.id)}" aria-label="${s.p.saved.includes(r.id) ? "Fjern" : "Lagre"} ${html(r.title)}">${s.p.saved.includes(r.id) ? "♥ Lagret" : "♡ Lagre"}</button>${s.p.ratings[r.id] ? `<span class="rating-label">★ ${s.p.ratings[r.id]}/5</span>` : ""}</div>`;
 }
-async function generate({ allowPartial = false } = {}) {
+async function generate({ allowPartial = false, replaceIndex } = {}) {
   if (s.loading) {
     toast("Vent et øyeblikk mens profilen lastes.");
     return;
   }
-  if (s.collecting) return;
+  if (s.collecting || s.planning) return;
   if (allowPartial) {
     if (!s.pendingPartial || s.collection?.status !== "incomplete") {
       toast("Hentingen må avsluttes før du kan bruke tilbudene i en plan.");
@@ -260,15 +271,69 @@ async function generate({ allowPartial = false } = {}) {
   s.pendingPartial = false;
   $("partial-plan").hidden = true;
   $("collection-next").hidden = true;
+  s.planning = true;
+  $("planning-feedback").hidden = false;
+  $("planning-feedback").textContent =
+    "Tilbudene er hentet. Setter sammen nye retter og kontrollerer 80 %-målet, variasjon og hele handlebudsjettet …";
+  $("planning-feedback").classList.remove("over-budget");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  let result;
+  try {
+    result = planFromOffers(s.p, s.offers, s.stale, ++s.variation, {
+      replaceIndex,
+    });
+    if (!result.report.metTarget || !result.report.withinBudget) {
+      $("planning-feedback").classList.add("over-budget");
+      $("planning-feedback").textContent =
+        `Prøvde ${result.report.recipesCreated} nye tilbudsoppskrifter. Beste funne forslag har ${result.plan.length} av ${s.p.days} middager, ${amount(result.report.achieved)} % tilbudsvarer og handleanslag ${money(result.report.cost)}.` +
+        (!result.report.metTarget
+          ? ` Målet på ${OFFER_TARGET} % er ikke nådd. ${result.report.missing.length ? "Uten tilbud: " + result.report.missing.join(", ") + "." : ""}`
+          : "") +
+        (!result.report.withinBudget
+          ? ` Budsjettet på ${money(s.p.budget)} er ikke nådd.`
+          : "") +
+        " Den eksisterende planen er beholdt. Registrer basisvarene du har hjemme, gi mer tid, lås opp retter eller endre budsjettet før et nytt forsøk.";
+      view("plan");
+      return;
+    }
+    const candidate = {
+      ...s.p,
+      plan: result.plan,
+      generatedRecipes: keepGeneratedRecipes(
+        s.p,
+        result.generatedRecipes,
+        result.plan,
+      ),
+    };
+    if (!validateProfile(candidate))
+      throw new Error(
+        "Det er ikke plass til flere nye oppskrifter i denne profilen. Eksporter kokeboka eller fjern gamle oppskrifter før du prøver igjen.",
+      );
+  } catch (error) {
+    $("planning-feedback").classList.add("over-budget");
+    $("planning-feedback").textContent =
+      error.message + " Den eksisterende planen er beholdt.";
+    return;
+  } finally {
+    s.planning = false;
+  }
   const locked = s.p.locked.map((i) => ({ id: s.p.plan[i], index: i }));
   mutatePlan(() => {
-    s.p.plan = makePlan(s.p, s.offers, s.stale, ++s.variation);
+    s.p.plan = result.plan;
+    s.p.generatedRecipes = keepGeneratedRecipes(
+      s.p,
+      result.generatedRecipes,
+      result.plan,
+    );
     s.p.planBasis = {
       generated: s.meta.generated,
       complete: !!s.meta.coverage?.complete,
       offers: s.meta.coverage?.offersFetched || 0,
       catalogs: s.meta.coverage?.catalogsTotal || 0,
       missing: s.meta.coverage?.missing || 0,
+      target: OFFER_TARGET,
+      newRecipes: result.report.generated,
+      variety: result.report.variety,
     };
     const positions = new Set();
     for (const { id, index } of locked) {
@@ -280,6 +345,8 @@ async function generate({ allowPartial = false } = {}) {
     }
     s.p.locked = [...positions].sort((a, b) => a - b);
   });
+  $("planning-feedback").textContent =
+    `Uka er klar: ${amount(result.report.achieved)} % av handlevarene er fra tilbudsavisene. ${result.report.generated} retter er laget fra råvarene${result.report.luxuryMeals ? `, og ${result.report.luxuryMeals} middager bruker luksusråvarer med dokumentert rabatt eller historisk lav tilbudspris` : ""}. Handleanslag ${money(result.report.cost)}${s.p.budget ? " innenfor budsjettet" : ""}. Åpne ukas handleliste under.`;
   view("plan");
   if (s.p.plan.length < s.p.days)
     toast(
@@ -325,13 +392,13 @@ function renderPlan() {
   $("plan-data-basis").hidden = !s.p.plan.length || !s.p.planBasis;
   if (s.p.planBasis)
     $("plan-data-basis").textContent =
-      `${s.p.planBasis.complete ? "Kildens oppgitte antall tilbud ble kontrollert før planlegging." : "Planen ble laget etter ditt valg med ufullstendig tilbudsgrunnlag."} ${s.p.planBasis.offers} tilbud · ${s.p.planBasis.catalogs} aviser · hentet ${new Date(s.p.planBasis.generated).toLocaleString("nb-NO")}.${s.p.planMode === "discounts" ? " Søket prioriterer tilbudsandel, deretter dokumentert prosentavslag og pakningskostnad. Det garanterer ikke den matematisk beste kombinasjonen." : ""}${saving.lines ? ` ${money(saving.savings)} annonsert avslag på ${saving.lines} handlelinjer med sammenlignbar førpris; øvrige rabatter er ukjente.` : ""}`;
+      `${s.p.planBasis.complete ? "Kildens oppgitte antall tilbud ble kontrollert før planlegging." : "Tilbudsgrunnlaget har kildeavvik og er merket som ufullstendig. Se dekningsrapporten."} ${s.p.planBasis.offers} tilbud · ${s.p.planBasis.catalogs} aviser · hentet ${new Date(s.p.planBasis.generated).toLocaleString("nb-NO")}.${s.p.planBasis.newRecipes ? ` ${s.p.planBasis.newRecipes} nye retter ble bygget fra tilbudene.` : ""}${saving.lines ? ` ${money(saving.savings)} annonsert avslag på ${saving.lines} handlelinjer med sammenlignbar førpris; øvrige rabatter er ukjente.` : ""}`;
   $("coverage-status").hidden = !s.p.plan.length;
   $("coverage-status").textContent =
-    `${covered.offered} av ${covered.total} varer som må kjøpes har brukbar tilbudspris (${amount(covered.percent)} %). ${["offers", "discounts"].includes(s.p.planMode) && covered.percent < 80 ? (s.stale ? "Felles tilbudsgrunnlag er gammelt. Legg inn gyldige egne tilbud eller oppdater kilden." : "Målet er minst 80 %. Det nås ikke med dagens retter og tilbud. Varene uten tilbud står i handlelisten.") : "Varer du har nok av hjemme er holdt utenfor andelen."}`;
+    `${covered.offered} av ${covered.total} ulike varer som må kjøpes er fra tilbudsavisene (${amount(covered.percent)} %). ${covered.percent < OFFER_TARGET ? "Målet på 80 % er ikke nådd med den gjeldende planen. Hent tilbud og lag meny på nytt for nye oppskrifter." : "80 %-målet er nådd."} Andelen teller handlevarer, ikke kroner eller kilo. Varer merket som faste lavpriser teller ikke som tilbud. Rabatt er bare dokumentert der førpris eller sammenlignbar historikk finnes. Varer du har nok av hjemme teller ikke.`;
   $("coverage-status").classList.toggle(
     "over-budget",
-    ["offers", "discounts"].includes(s.p.planMode) && covered.percent < 80,
+    covered.percent < OFFER_TARGET,
   );
   $("plan-empty").hidden = !!s.p.plan.length;
   $("plan-summary").hidden = !s.p.plan.length;
@@ -349,16 +416,20 @@ function renderPlan() {
       : `Anslaget er ${money(s.p.budget - total)} under budsjettet på ${money(s.p.budget)}. Endelig butikkpris kan avvike.`;
   $("budget-status").classList.toggle("over-budget", total > s.p.budget);
   $("plan-summary").innerHTML =
-    `<div class="summary-stat"><span>Middager · ${s.p.servings} porsjoner</span><strong>${s.p.plan.length}</strong></div><div class="summary-stat"><span>Hele handleanslaget, etter det du har hjemme</span><strong>${money(total)}</strong></div><div class="summary-stat"><span>Råvarer med tilbudspris</span><strong>${toBuy.filter((i) => i.offer).length} av ${toBuy.length}</strong></div>`;
+    `<div class="summary-stat"><span>Middager · ${s.p.servings} porsjoner</span><strong>${s.p.plan.length}</strong></div><div class="summary-stat"><span>Hele handleanslaget, etter det du har hjemme</span><strong>${money(total)}</strong></div><div class="summary-stat"><span>Råvarer på tilbud</span><strong>${covered.offered} av ${covered.total}</strong></div>`;
+  $("weekly-shopping-cta").hidden = !s.p.plan.length;
+  $("shopping-cta-detail").textContent =
+    `${toBuy.length} handlevarer · ${money(total)} for hele innkjøpet · ${money(total / Math.max(1, s.p.plan.length * s.p.servings))} per middagsporsjon i snitt`;
+  renderDealStart();
   $("meal-plan").innerHTML = s.p.plan
     .map((id, index) => {
       const r = catalog(s.p).find((r) => r.id === id);
       if (!r) return "";
-      const matched = items
-        .filter((i) => i.offer && r.ingredients.some(([iid]) => iid === i.id))
-        .slice(0, 3);
+      const matched = items.filter(
+        (i) => i.offer && r.ingredients.some(([iid]) => iid === i.id),
+      );
       const locked = s.p.locked.includes(index);
-      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy"><h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Tilbud i handlelisten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="used-offer"><strong>${html(i.offer.name)}</strong><em>${html(i.offer.store_label)} · ${money(price(i.offer.price))}</em>${offerComparison(i.offer, true)}</div>`).join("")}<p class="small-note">Tilbud uten sikker mengde brukes ikke i anslaget. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
+      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy">${r.createdByOffers ? '<span class="recipe-origin">Ny oppskrift fra tilbudene</span>' : ""}<h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Disse prisene fra avisene er med i retten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="meal-deal"><div><strong>${html(i.offer.name)}</strong><small>${html(i.offer.store_label)} · ${html(i.offer.mengde || "")}</small></div><div><strong>${money(price(i.offer.price))}</strong>${comparison(i.offer).before ? `<small>Før <del>${money(comparison(i.offer).before)}</del> · ${amount(comparison(i.offer).discount)} %</small>` : "<small>Rabatt ikke dokumentert</small>"}${offerTraits(i.offer).organic ? "<small>Merket økologisk</small>" : ""}</div></div>`).join("")}<p class="small-note">Pakningspriser. Hele ukas innkjøp og rester er samlet i handlelisten. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked || s.planning ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
     })
     .join("");
 }
@@ -458,11 +529,57 @@ function renderOffers() {
         .join("")
     : '<div class="empty-state"><h3>Ingen tilbud passer</h3><p>Prøv et annet søk eller legg inn et tilbud fra en kjede.</p></div>';
 }
+function renderDealStart() {
+  const pool = availableOffers(s.offers, s.p, s.stale);
+  const candidates = pool
+    .filter(
+      (o) =>
+        isAdvertisedOffer(o) &&
+        o.matches.some((id) => canPriceIngredient(id, o)),
+    )
+    .sort((a, b) => {
+      const score = (o) =>
+        Math.max(0, comparison(o).score) +
+        (offerTraits(o).luxury ? 25 : 0) +
+        (s.p.preferOrganic && offerTraits(o).organic ? 8 : 0);
+      return (
+        score(b) - score(a) ||
+        (price(a.price) || Infinity) - (price(b.price) || Infinity)
+      );
+    });
+  const used = new Set();
+  const chosen = candidates
+    .filter((o) => {
+      const id = o.matches[0];
+      if (used.has(id)) return false;
+      used.add(id);
+      return true;
+    })
+    .slice(0, 6);
+  $("deal-start").innerHTML =
+    `<div class="deal-start-heading"><div><p class="section-kicker">Tilbudene først</p><h3>${chosen.length ? "Råvarer å bygge uka rundt" : "Hent råvarene før du velger middag"}</h3><p>${chosen.length ? "Disse prisene kan brukes i planleggingen. Prioriter en råvare eller la appen velge innenfor budsjettet." : "Vi leter etter dokumenterte rabatter, små luksusfunn og råvarer som fungerer sammen."}</p></div><button class="secondary-button" data-view="offers">Se alle tilbud</button></div>${
+      chosen.length
+        ? `<div class="deal-start-grid">${chosen
+            .map((o) => {
+              const c = comparison(o),
+                traits = offerTraits(o);
+              return `<article class="start-deal"><span>${traits.luxury ? "Luksusråvare" : "Tilbudsgrunnlag"}${traits.organic ? " · økologisk" : ""}</span><h4>${html(o.name)}</h4><p>${html(o.store_label)} · ${html(o.mengde || "")}</p><strong>${money(c.current)}</strong>${c.before ? `<small>Før <del>${money(c.before)}</del> · ${amount(c.discount)} % lavere</small>` : "<small>Førpris mangler</small>"}<small>${html(c.rating)}</small><button class="text-button" data-offer="${html(o.id)}" aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter råvaren"}</button></article>`;
+            })
+            .join("")}</div>`
+        : ""
+    }`;
+}
+function canPriceIngredient(id, o) {
+  return comparison(o).safe && packageSize(o, INGREDIENTS[id][1]) > 0;
+}
 function renderList() {
   const items = basket(s.p, s.offers, s.stale);
   const remaining = items.filter(
     (i) => i.need > 0 && !s.p.checked.includes(i.id),
   );
+  const covered = coverage(items);
+  $("list-week-summary").textContent =
+    `${s.p.plan.length} middager · ${s.p.servings} porsjoner · ${amount(covered.percent)} % av varene som må kjøpes er fra tilbudsavisene. Tilbud er gruppert per kjede under.`;
   $("shopping-overview").innerHTML =
     `<div class="shop-overview-card"><span>Gjenstår å handle</span><strong>${remaining.length} varer</strong></div><div class="shop-overview-card"><span>Hele handleanslaget</span><strong>${money(items.reduce((n, i) => n + i.cost, 0))}</strong></div><div class="shop-overview-card"><span>Gjenstår, anslag</span><strong>${money(remaining.reduce((n, i) => n + i.cost, 0))}</strong></div>`;
   const groups = new Map();
@@ -471,7 +588,7 @@ function renderList() {
       i.need === 0
         ? "Har nok hjemme"
         : i.offer
-          ? "Tilbud · " + i.offer.store_label
+          ? (i.onOffer ? "Tilbud · " : "Fast pris · ") + i.offer.store_label
           : i.group;
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(i);
@@ -480,7 +597,7 @@ function renderList() {
     ? [...groups]
         .map(
           ([group, list]) =>
-            `<section class="list-section"><h3>${html(group)}</h3><ul class="list-items">${list.map((i) => `<li class="shopping-item${s.p.checked.includes(i.id) ? " is-checked" : ""}${i.need === 0 ? " at-home" : ""}"><label>${i.need > 0 ? `<input type="checkbox" data-checked="${i.id}" aria-label="Har handlet ${html(i.name)}" ${s.p.checked.includes(i.id) ? "checked" : ""}>` : '<span aria-label="Har hjemme">✓</span>'}<span><strong>${html(i.name)}</strong><small>Til rettene: ${amount(i.quantity)} ${i.unit}${i.atHome ? ` · ${amount(i.atHome)} ${i.unit} hjemme` : ""}</small>${i.need > 0 ? `<small>Kjøp ${i.packs} × ${amount(i.size)} ${i.unit}${i.leftover ? ` · ${amount(i.leftover)} ${i.unit} til overs` : ""}</small>` : ""}${i.offer ? `<small>${html(i.offer.name)} · ${i.offer.manual ? "eget tilbud" : "sjekk gyldighet"}</small>` : ""}</span><span class="item-price">${money(i.cost)}<small>${i.need === 0 ? "Hjemme" : i.offer ? "Tilbudspris" : "Anslag"}</small></span></label></li>`).join("")}</ul></section>`,
+            `<section class="list-section"><h3>${html(group)}</h3><ul class="list-items">${list.map((i) => `<li class="shopping-item${s.p.checked.includes(i.id) ? " is-checked" : ""}${i.need === 0 ? " at-home" : ""}"><label>${i.need > 0 ? `<input type="checkbox" data-checked="${i.id}" aria-label="Har handlet ${html(i.name)}" ${s.p.checked.includes(i.id) ? "checked" : ""}>` : '<span aria-label="Har hjemme">✓</span>'}<span><strong>${html(i.name)}</strong><small>Til rettene: ${amount(i.quantity)} ${i.unit}${i.atHome ? ` · ${amount(i.atHome)} ${i.unit} hjemme` : ""}</small>${i.need > 0 ? `<small>Kjøp ${i.packs} × ${amount(i.size)} ${i.unit}${i.leftover ? ` · ${amount(i.leftover)} ${i.unit} til overs` : ""}</small>` : ""}${i.offer ? `<small>${html(i.offer.name)} · ${i.offer.manual ? "eget tilbud" : i.onOffer ? "sjekk gyldighet" : "fast pris, teller ikke som tilbud"}${offerTraits(i.offer).organic ? " · merket økologisk" : ""}</small>${comparison(i.offer).before ? `<small>Pakning ${money(price(i.offer.price))}, før ${money(comparison(i.offer).before)} · ${amount(comparison(i.offer).discount)} % lavere</small>` : "<small>Førpris ikke oppgitt</small>"}` : ""}</span><span class="item-price">${money(i.cost)}<small>${i.need === 0 ? "Hjemme" : i.offer ? (i.onOffer ? "Tilbudspris" : "Fast pris") : "Anslag"}</small></span></label>${i.offer?.sourceUrl ? `<a class="list-source" href="${html(i.offer.sourceUrl)}" target="_blank" rel="noreferrer">Kontroller pris og lokal gyldighet i avisen</a>` : ""}</li>`).join("")}</ul></section>`,
         )
         .join("")
     : '<div class="empty-state"><h3>Ingen middager ennå</h3><p>Lag en ukeplan eller legg til retter fra kokeboka.</p><button class="primary-button" data-view="cookbook">Finn oppskrifter</button></div>';
@@ -517,7 +634,7 @@ function renderBook() {
     ? found
         .map(
           (r) =>
-            `<article class="recipe-card"><div class="recipe-card-top"><span>${r.id.startsWith("custom-") ? "Din egen" : r.tags.includes("vegetarian") ? "Grønn middag" : "Hverdagsfavoritt"}</span><strong>${money(recipeEstimate(r, s.p.servings))}</strong></div><h3>${html(r.title)}</h3><p>${html(r.tip)}</p>${tags(r)}<p class="small-note">Anslått råvareforbruk for ${s.p.servings} porsjoner, ikke handlepris.</p>${tonight ? `<p class="pantry-match">${missing(r) ? `Mangler ${missing(r)} råvarer` : "Du har alt til denne"}</p>` : ""}${!eligible(r, s.p) ? '<p class="preference-warning">Passer ikke råvarevalgene eller tidsgrensen din</p>' : ""}${recipeActions(r)}<button class="text-button add-plan" data-add="${r.id}">Legg i ukeplanen</button></article>`,
+            `<article class="recipe-card"><div class="recipe-card-top"><span>${r.createdByOffers ? "Laget fra tilbudene" : r.id.startsWith("custom-") ? "Din egen" : r.tags.includes("vegetarian") ? "Grønn middag" : "Hverdagsfavoritt"}</span><strong>${money(recipeEstimate(r, s.p.servings))}</strong></div><h3>${html(r.title)}</h3><p>${html(r.tip)}</p>${tags(r)}<p class="small-note">Anslått råvareforbruk for ${s.p.servings} porsjoner, ikke handlepris.</p>${tonight ? `<p class="pantry-match">${missing(r) ? `Mangler ${missing(r)} råvarer` : "Du har alt til denne"}</p>` : ""}${!eligible(r, s.p) ? '<p class="preference-warning">Passer ikke råvarevalgene eller tidsgrensen din</p>' : ""}${recipeActions(r)}<button class="text-button add-plan" data-add="${r.id}">Legg i ukeplanen</button></article>`,
         )
         .join("")
     : '<div class="empty-state"><h3>Ingen retter passer valgene</h3><p>Prøv et annet filter, legg til egne oppskrifter eller oppdater det du har hjemme.</p><button id="show-all-recipes" class="secondary-button">Vis alle oppskrifter</button></div>';
@@ -545,7 +662,7 @@ function openRecipe(id) {
   const d = $("recipe-dialog");
   const rating = s.p.ratings[id] || 0;
   $("recipe-detail").innerHTML =
-    `<p class="section-kicker">${r.time} minutter · ${s.p.servings} porsjoner</p><h2 id="recipe-title">${html(r.title)}</h2>${tags(r)}<div class="recipe-actions"><button class="save-button" data-save="${id}" aria-pressed="${s.p.saved.includes(id)}">${s.p.saved.includes(id) ? "♥ Lagret" : "♡ Lagre i kokeboka"}</button><button class="secondary-button" data-add="${id}">Legg i uka</button><button class="text-button" data-share-recipe="${id}">Del oppskrift</button>${id.startsWith("custom-") ? `<button class="text-button" data-edit-recipe="${id}">Rediger</button><button class="text-button" data-delete-recipe="${id}">Slett</button>` : ""}</div><div class="detail-columns"><section><h3>Ingredienser</h3><ul class="ingredients-list">${r.ingredients.map(([iid, n]) => `<li><span>${html(INGREDIENTS[iid][0])}</span><strong>${amount((n * s.p.servings) / 2)} ${INGREDIENTS[iid][1]}</strong></li>`).join("")}</ul><p class="small-note">Salt, pepper og vann etter behov.</p></section><section><h3>Slik gjør du</h3><ol class="steps">${r.steps.map((step) => `<li>${html(scaledStep(step))}</li>`).join("")}</ol></section></div><aside class="recipe-tip"><strong>Smaksgrepet</strong><p>${html(r.tip)}</p></aside><section class="my-recipe"><h3>Ville du laget den igjen?</h3><div class="stars" role="group" aria-label="Din vurdering">${[1, 2, 3, 4, 5].map((n) => `<button data-rate="${n}" aria-label="Gi ${n} stjerner" aria-pressed="${rating === n}" class="${n <= rating ? "rated" : ""}">★</button>`).join("")}<span>${rating ? rating + "/5" : "Ikke vurdert"}</span></div><label for="recipe-note">Mine notater</label><textarea id="recipe-note" maxlength="3000" rows="3" placeholder="Litt mer sitron neste gang?">${html(s.p.notes[id] || "")}</textarea><button id="save-note" class="secondary-button">Lagre notat</button></section>`;
+    `<p class="section-kicker">${r.time} minutter · ${s.p.servings} porsjoner</p><h2 id="recipe-title">${html(r.title)}</h2>${tags(r)}<div class="recipe-actions"><button class="save-button" data-save="${id}" aria-pressed="${s.p.saved.includes(id)}">${s.p.saved.includes(id) ? "♥ Lagret" : "♡ Lagre i kokeboka"}</button><button class="secondary-button" data-add="${id}">Legg i uka</button><button class="text-button" data-share-recipe="${id}">Del oppskrift</button>${id.startsWith("custom-") || r.createdByOffers ? `<button class="text-button" data-edit-recipe="${id}">${r.createdByOffers ? "Tilpass som egen oppskrift" : "Rediger"}</button><button class="text-button" data-delete-recipe="${id}">Slett</button>` : ""}</div><div class="detail-columns"><section><h3>Ingredienser</h3><ul class="ingredients-list">${r.ingredients.map(([iid, n]) => `<li><span>${html(INGREDIENTS[iid][0])}</span><strong>${amount((n * s.p.servings) / 2)} ${INGREDIENTS[iid][1]}</strong></li>`).join("")}</ul><p class="small-note">Vann etter behov. Salt og pepper står i ingredienslisten når de inngår i oppskriften.</p></section><section><h3>Slik gjør du</h3><ol class="steps">${r.steps.map((step) => `<li>${html(scaledStep(step))}</li>`).join("")}</ol></section></div><aside class="recipe-tip"><strong>Smaksgrepet</strong><p>${html(r.tip)}</p></aside><section class="my-recipe"><h3>Ville du laget den igjen?</h3><div class="stars" role="group" aria-label="Din vurdering">${[1, 2, 3, 4, 5].map((n) => `<button data-rate="${n}" aria-label="Gi ${n} stjerner" aria-pressed="${rating === n}" class="${n <= rating ? "rated" : ""}">★</button>`).join("")}<span>${rating ? rating + "/5" : "Ikke vurdert"}</span></div><label for="recipe-note">Mine notater</label><textarea id="recipe-note" maxlength="3000" rows="3" placeholder="Litt mer sitron neste gang?">${html(s.p.notes[id] || "")}</textarea><button id="save-note" class="secondary-button">Lagre notat</button></section>`;
   if (!d.open) d.showModal();
 }
 function renderPantry() {
@@ -588,9 +705,9 @@ function addIngredientRow(id = "rice", quantity = "") {
   row.querySelector("select").value = id;
 }
 function openEditor(id) {
-  const r = s.p.customRecipes.find((r) => r.id === id);
+  const r = catalog(s.p).find((r) => r.id === id);
   $("recipe-form").reset();
-  $("recipe-edit-id").value = r?.id || "";
+  $("recipe-edit-id").value = r?.id.startsWith("custom-") ? r.id : "";
   $("custom-title").value = r?.title || "";
   $("custom-time").value = r?.time || 30;
   $("custom-tip").value = r?.tip || "";
@@ -766,7 +883,7 @@ function renderCollection(result) {
   if (s.pendingPartial)
     $("collection-next").textContent = errors
       ? "Noen tilbud kunne ikke hentes eller kontrolleres. Du kan hente alt på nytt, eller velge en ukeplan med de innsamlede tilbudene. Planen merkes med ufullstendig grunnlag."
-      : "Alle tilgjengelige tilbudssider er gjennomgått. Kildens oppgitte antall kan ikke bekreftes. Velg knappen under for å lage ukeplanen likevel; den merkes med ufullstendig grunnlag. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
+      : "Alle tilgjengelige tilbudssider er gjennomgått. Kildens oppgitte antall kan ikke bekreftes. Planen kan lages med de innsamlede tilbudene, men grunnlaget merkes som ufullstendig. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
   $("collection-panel").classList.toggle(
     "has-gaps",
     !c.complete && result.status !== "collecting",
@@ -829,10 +946,13 @@ async function collectAllOffers(force = false) {
     s.offerPage = 0;
     applyOfferData(data, true);
     if (!data.meta.coverage.complete) {
+      const errors = data.meta.coverage.catalogs.some((c) => c.error);
       toast(
-        "Hentingen er ferdig. Velg om du vil lage ukeplan med innsamlede tilbud.",
+        errors
+          ? "Hentingen er avsluttet med feil. Du kan velge å bruke de innsamlede tilbudene."
+          : "Alle tilgjengelige sider er hentet. Antallsavvik fra kilden vises i planen.",
       );
-      return false;
+      return !errors && data.products.length > 0;
     }
     return true;
   } catch (error) {
@@ -905,19 +1025,7 @@ document.addEventListener("click", async (event) => {
   }
   if (d.swap !== undefined) {
     if (s.p.locked.includes(Number(d.swap))) return;
-    if (!(await collectAllOffers())) return;
-    const pool = storePool(availableOffers(s.offers, s.p, s.stale), s.p);
-    const r = catalog(s.p)
-      .filter((r) => eligible(r, s.p) && !s.p.plan.includes(r.id))
-      .sort((a, b) => recipeScore(b, s.p, pool) - recipeScore(a, s.p, pool))[0];
-    if (!r) {
-      toast("Ingen flere retter passer preferansene.");
-      return;
-    }
-    mutatePlan(() => {
-      s.p.plan[Number(d.swap)] = r.id;
-    });
-    render();
+    await generate({ replaceIndex: Number(d.swap) });
   }
   if (d.removeMeal !== undefined) {
     const index = Number(d.removeMeal);
@@ -931,7 +1039,7 @@ document.addEventListener("click", async (event) => {
   }
   if (d.shareRecipe) {
     const r = catalog(s.p).find((r) => r.id === d.shareRecipe);
-    if (r.id.startsWith("custom-")) {
+    if (r.id.startsWith("custom-") || r.createdByOffers) {
       const text =
         r.title +
         " · " +
@@ -1008,6 +1116,9 @@ function extraClick(d, b) {
       s.p.plan = kept.map((x) => x.id);
       s.p.locked = kept.flatMap((x, i) => (x.locked ? [i] : []));
       s.p.customRecipes = s.p.customRecipes.filter(
+        (r) => r.id !== d.deleteRecipe,
+      );
+      s.p.generatedRecipes = s.p.generatedRecipes.filter(
         (r) => r.id !== d.deleteRecipe,
       );
       s.p.saved = s.p.saved.filter((id) => id !== d.deleteRecipe);
@@ -1240,7 +1351,7 @@ $("copy-list").addEventListener("click", () => {
       items
         .map(
           (i) =>
-            `☐ ${i.name}: ${amount(i.need)} ${i.unit} mangler (kjøp ${i.packs} × ${amount(i.size)} ${i.unit}, ${money(i.cost)} ${i.offer ? "tilbud, sjekk gyldighet" : "anslag"})`,
+            `☐ ${i.name}: ${amount(i.need)} ${i.unit} mangler (kjøp ${i.packs} × ${amount(i.size)} ${i.unit}, ${money(i.cost)} ${i.offer ? i.offer.store_label + (i.onOffer ? ", tilbud, sjekk gyldighet" : ", fast pris") : "anslag"})`,
         )
         .join("\n"),
     "Handlelisten er kopiert",
@@ -1248,9 +1359,10 @@ $("copy-list").addEventListener("click", () => {
 });
 function setupNewFeatures() {
   $("offer-week").addEventListener("click", () => {
-    if (s.collecting) return;
-    s.p.planMode = "discounts";
-    s.p.allowRepeats = true;
+    if (s.collecting || s.planning) return;
+    s.p.planMode = "luxury";
+    s.p.allowRepeats = false;
+    s.p.preferVariety = true;
     s.p.days = 7;
     s.p.maxStores = 0;
     s.p.stores = [];
@@ -1258,6 +1370,16 @@ function setupNewFeatures() {
     changed();
     generate();
   });
+  for (const [id, key] of [
+    ["prefer-organic", "preferOrganic"],
+    ["prefer-variety", "preferVariety"],
+  ]) {
+    $(id).addEventListener("change", () => {
+      s.p[key] = $(id).checked;
+      changed();
+      render();
+    });
+  }
   $("plan-mode").addEventListener("change", () => {
     s.p.planMode = $("plan-mode").value;
     changed();

@@ -56,6 +56,126 @@
   flex-wrap: wrap;
   gap: 10px;
 }
+.weekly-shopping-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 20px 0;
+  padding: 20px;
+  border: 2px solid #285c36;
+  border-radius: 12px;
+  background: #eef5e8;
+}
+.weekly-shopping-cta span {
+  display: block;
+  margin-top: 6px;
+  color: #4b6152;
+  font-size: 0.9rem;
+}
+.deal-start {
+  margin: 22px 0;
+  padding: 20px;
+  background: #f6f3e9;
+  border: 1px solid #e0dfd0;
+  border-radius: 12px;
+}
+.deal-start-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.deal-start-heading h3 {
+  margin: 4px 0 8px;
+  font-family: Georgia, serif;
+  font-size: 1.45rem;
+}
+.deal-start-heading p {
+  margin: 0 0 12px;
+}
+.deal-start-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.start-deal {
+  padding: 16px;
+  background: white;
+  border-radius: 10px;
+}
+.start-deal > span,
+.recipe-origin {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #285c36;
+}
+.start-deal h4 {
+  margin: 8px 0;
+}
+.start-deal p {
+  font-size: 0.8rem;
+  color: #536359;
+}
+.start-deal > strong {
+  display: block;
+  font-size: 1.4rem;
+}
+.start-deal > small {
+  display: block;
+  margin: 5px 0;
+}
+.meal-deal {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #dae4d5;
+}
+.meal-deal > div {
+  min-width: 0;
+}
+.meal-deal > div:last-child {
+  text-align: right;
+  flex-shrink: 0;
+}
+.meal-deal strong {
+  font-size: 0.9rem;
+}
+.meal-deal small {
+  display: block;
+  font-size: 0.75rem;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #536359;
+}
+.list-source {
+  display: block;
+  margin: 0 12px 12px 42px;
+  font-size: 0.8rem;
+}
+@media (max-width: 700px) {
+  .weekly-shopping-cta,
+  .deal-start-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .deal-start-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .meal-deal {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .meal-deal > div:last-child {
+    text-align: left;
+  }
+}
+@media (max-width: 430px) {
+  .deal-start-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .coverage-table-wrap {
   overflow: auto;
   max-height: 350px;
@@ -1648,8 +1768,13 @@ fieldset {
 }
 @media (max-width: 700px) {
   .topbar {
+    flex-wrap: wrap;
+    gap: 12px;
     padding-top: 12px;
     padding-bottom: 12px;
+  }
+  .top-meta {
+    flex-wrap: wrap;
   }
   .flow-tab {
     min-width: 95px;

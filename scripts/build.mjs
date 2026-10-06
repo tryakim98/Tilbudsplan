@@ -3,6 +3,7 @@ const files = {
   "index.html": "text/html; charset=utf-8",
   "app.js": "text/javascript; charset=utf-8",
   "collection-client.js": "text/javascript; charset=utf-8",
+  "offer-planner.js": "text/javascript; charset=utf-8",
   "recipes.js": "text/javascript; charset=utf-8",
   "engine.js": "text/javascript; charset=utf-8",
   "model.js": "text/javascript; charset=utf-8",

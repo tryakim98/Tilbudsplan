@@ -1,6 +1,13 @@
 import { INGREDIENTS } from "./recipes.js";
 import { catalog, emptyProfile, withDefaults, localDate } from "./model.js";
-import { chainInfo, priceBasis, packInfo, comparison } from "./offers.js";
+import {
+  chainInfo,
+  priceBasis,
+  packInfo,
+  comparison,
+  isAdvertisedOffer,
+  declaredOrganic,
+} from "./offers.js";
 export { emptyProfile, withDefaults, catalog };
 export const normalize = (s = "") =>
   String(s)
@@ -51,6 +58,12 @@ export function ingredientOffer(o, id) {
     return false;
   if (["beans", "chickpeas"].includes(id)) return false;
   if (
+    /ferdigrett|middag|bowl|fj[oø]rdland|proteinbowl|mini omelett|f[aå]rik[aå]l|frikasse|hvitl[oø]ksbr[oø]d/.test(
+      normalize(o.name + " " + (o.mengde || "")),
+    )
+  )
+    return false;
+  if (
     [
       "potato",
       "carrot",
@@ -59,8 +72,17 @@ export function ingredientOffer(o, id) {
       "cauliflower",
       "spinach",
       "mushroom",
+      "sweetpotato",
+      "redonion",
+      "freshtomato",
+      "broccolini",
+      "greenbeans",
+      "zucchini",
+      "leek",
     ].includes(id) &&
-    /chips|grateng|mos|suppe|salat|blanding|pasta|pizza|ferdigrett/.test(text)
+    /chips|grateng|mos|suppe|salat|blanding|pasta|pizza|ferdigrett|kimchi|hakkede|makrell|ketchup|saft|squashies/.test(
+      text,
+    )
   )
     return false;
   if (
@@ -70,6 +92,18 @@ export function ingredientOffer(o, id) {
     return false;
   if (id === "wraps" && /chips|taco kit/.test(text)) return false;
   if (id === "honey" && /melon|kylling|sennep|glasur/.test(text)) return false;
+  if (id === "mince" && /kylling|svin|lam/.test(text)) return false;
+  if (id === "beefsteak" && /svin|lam/.test(text)) return false;
+  if (
+    id === "scampi" &&
+    /(?:med|m) skall|hel[e]? scampi|skall p[aå]/.test(text)
+  )
+    return false;
+  if (
+    ["salt", "blackpepper"].includes(id) &&
+    /chips|popcorn|b[oø]sse|focaccia|sjokolade|lakris|blandet/.test(text)
+  )
+    return false;
   if (
     id === "chicken" &&
     (/(?:^| )(?:skivet|stekt|grillet|rokt|palegg)(?: |$)/.test(text) ||
@@ -138,9 +172,21 @@ export function offerActive(o, stale, today = localDate()) {
     return false;
   return true;
 }
+const ingredientFamily = (id) =>
+  ({
+    chickenmince: "chicken",
+    porktender: "pork",
+    porkmince: "pork",
+    beefsteak: "mince",
+    lambfilet: "lambmince",
+  })[id] || id;
 export const eligible = (r, p) =>
   !!r &&
-  !r.ingredients.some(([id]) => p.dislikes.includes(id)) &&
+  !r.ingredients.some(([id]) =>
+    p.dislikes.some(
+      (disliked) => ingredientFamily(disliked) === ingredientFamily(id),
+    ),
+  ) &&
   (!p.goals.includes("vegetarian") || r.tags.includes("vegetarian")) &&
   (!p.maxTime || r.time <= p.maxTime);
 export function availableOffers(offers, p, stale) {
@@ -164,6 +210,7 @@ export function offerFor(
   pool,
   mode = "offers",
   maxCost = Infinity,
+  preferences = {},
 ) {
   if (quantity <= 0) return null;
   if (!candidateCache.has(pool)) candidateCache.set(pool, new Map());
@@ -182,24 +229,37 @@ export function offerFor(
           size: packageSize(o, INGREDIENTS[id][1]),
           price: price(o.price),
           dealScore: Math.max(0, comparison(o).score),
+          organic: declaredOrganic(o),
+          onOffer: isAdvertisedOffer(o),
         }))
         .filter((o) => o.size > 0 && o.price > 0),
     );
-  return (
-    cache
-      .get(id)
-      .map((o) => ({
-        ...o,
-        cost: Math.ceil((quantity - 1e-8) / o.size) * o.price,
-      }))
-      .filter((o) => o.cost <= maxCost + 0.001)
-      .sort(
-        (a, b) =>
-          (mode === "discounts" ? b.dealScore - a.dealScore : 0) ||
-          a.cost - b.cost ||
-          b.dealScore - a.dealScore,
-      )[0] || null
-  );
+  const candidates = cache
+    .get(id)
+    .map((o) => ({
+      ...o,
+      cost: Math.ceil((quantity - 1e-8) / o.size) * o.price,
+    }))
+    .filter((o) => o.cost <= maxCost + 0.001)
+    .sort(
+      (a, b) =>
+        (mode !== "taste" ? Number(b.onOffer) - Number(a.onOffer) : 0) ||
+        (mode === "discounts" ? b.dealScore - a.dealScore : 0) ||
+        a.cost - b.cost ||
+        b.dealScore - a.dealScore,
+    );
+  if (mode === "luxury" && preferences.preferOrganic && candidates.length) {
+    const limit = candidates[0].cost * 1.1;
+    return (
+      candidates.find(
+        (o) =>
+          o.organic &&
+          o.onOffer === candidates[0].onOffer &&
+          o.cost <= limit + 0.001,
+      ) || candidates[0]
+    );
+  }
+  return candidates[0] || null;
 }
 export function storePool(offers, p) {
   const scores = new Map();
@@ -232,7 +292,7 @@ function itemsFor(p, totals, pool) {
     const [name, unit, defaultSize, estimate, group] = INGREDIENTS[id];
     const atHome = Math.min(quantity, p.pantry?.[id] || 0);
     const need = Math.max(0, quantity - atHome);
-    const match = offerFor(id, need, pool, p.planMode);
+    const match = offerFor(id, need, pool, p.planMode, Infinity, p);
     const size = match?.size || defaultSize;
     const packs = Math.ceil((need - 1e-8) / size);
     const cost = need > 0 ? (match ? match.cost : packs * estimate) : 0;
@@ -248,6 +308,7 @@ function itemsFor(p, totals, pool) {
       size,
       cost,
       offer: match?.offer || null,
+      onOffer: match?.onOffer ?? false,
       leftover: Math.max(
         0,
         Math.max(0, p.pantry?.[id] || 0) + packs * size - quantity,
@@ -258,12 +319,12 @@ function itemsFor(p, totals, pool) {
 export function basket(p, offers, stale) {
   return basketWithPool(p, availableOffers(offers, p, stale));
 }
-function basketWithPool(p, pool) {
+export function basketWithPool(p, pool) {
   const totals = totalsFor(p);
   const items = (selected) => budgetedItems(p, totals, selected);
   const better = (candidate, prior) => {
     if (!prior) return true;
-    if (["offers", "discounts"].includes(p.planMode)) {
+    if (["offers", "discounts", "luxury"].includes(p.planMode)) {
       const difference = coverage(candidate).percent - coverage(prior).percent;
       if (Math.abs(difference) > 0.001) return difference > 0;
     }
@@ -321,7 +382,7 @@ function basketWithPool(p, pool) {
 function budgetedItems(p, totals, pool) {
   const preferred = itemsFor(p, totals, pool);
   if (
-    p.planMode !== "discounts" ||
+    !["discounts", "luxury"].includes(p.planMode) ||
     !p.budget ||
     preferred.reduce((n, i) => n + i.cost, 0) <= p.budget
   )
@@ -350,6 +411,7 @@ function budgetedItems(p, totals, pool) {
     if (!match) continue;
     total += match.cost - item.cost;
     item.offer = match.offer;
+    item.onOffer = match.onOffer;
     item.size = match.size;
     item.packs = Math.ceil((item.need - 1e-8) / match.size);
     item.cost = match.cost;
@@ -364,12 +426,12 @@ export const basketTotal = (p, offers, stale) =>
   basket(p, offers, stale).reduce((n, i) => n + i.cost, 0);
 export function coverage(items) {
   const needed = items.filter((i) => i.need > 0),
-    offered = needed.filter((i) => i.offer);
+    offered = needed.filter((i) => i.offer && i.onOffer !== false);
   return {
     total: needed.length,
     offered: offered.length,
     percent: needed.length ? (offered.length / needed.length) * 100 : 100,
-    missing: needed.filter((i) => !i.offer),
+    missing: needed.filter((i) => !i.offer || i.onOffer === false),
   };
 }
 export function recipeEstimate(r, servings = 2) {
