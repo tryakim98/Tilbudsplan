@@ -13,7 +13,13 @@ export function canUsePartialCollection(data) {
     c?.catalogsTotal > 0 &&
     c.catalogsDone === c.catalogsTotal &&
     c.catalogs?.length === c.catalogsTotal &&
-    c.catalogs.every((r) => r.done && !r.error && r.localityVerified === true)
+    c.catalogs.every(
+      (r) =>
+        r.done &&
+        !r.error &&
+        (r.localityVerified === true ||
+          (r.unlocated === true && r.received === 0)),
+    )
   );
 }
 export function isCompleteCollection(data) {

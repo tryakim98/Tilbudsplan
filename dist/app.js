@@ -893,7 +893,7 @@ function renderCollection(result) {
   if (ended && !c.complete)
     $("collection-next").textContent = errors
       ? "Noen tilbud kunne ikke hentes eller kontrolleres. Ingen ny ukeplan er laget. Hent og kontroller lokale tilbud på nytt fra Tilbud-fanen."
-      : "Kildens oppgitte antall kan ikke bekreftes. Automatisk planlegging er stoppet, og den eksisterende planen er beholdt. Du kan uttrykkelig velge å bruke et ufullstendig grunnlag. 80 %-kravet og budsjettet gjelder fortsatt. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
+      : "Kildens oppgitte antall eller lokale butikktilknytning kan ikke bekreftes. Automatisk planlegging er stoppet, og den eksisterende planen er beholdt. Du kan uttrykkelig velge å bruke et ufullstendig grunnlag. 80 %-kravet og budsjettet gjelder fortsatt. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
   $("collection-panel").classList.toggle(
     "has-gaps",
     !c.complete && result.status !== "collecting",
@@ -901,8 +901,11 @@ function renderCollection(result) {
   if (c.catalogsSurveyed)
     $("collection-status").textContent +=
       ` ${c.catalogsSurveyed} aviser ${running ? "undersøkes" : "er undersøkt"}; ${c.catalogsExcluded} er utelatt fordi de gjelder butikker utenfor handleområdet.`;
+  if (c.catalogsUnlocated)
+    $("collection-status").textContent +=
+      ` ${c.catalogsUnlocated} aviser mangler butikkadresser og er ikke brukt. Lokal dekning er derfor ufullstendig.`;
   $("collection-table").innerHTML =
-    `<table><thead><tr><th>Kjede / avis</th><th>Kildens antall</th><th>Hentet</th><th>Kontroll</th></tr></thead><tbody>${c.catalogs.map((r) => `<tr><td>${html(r.chain)} · ${html(r.title)}${r.localStores?.length ? `<small>${html(localOfferLabel({ locality: { verified: r.localityVerified, stores: r.localStores } }))}</small>` : "<small>Lokal butikktilknytning venter på kontroll</small>"}</td><td>${r.expected ?? "Ukjent"}</td><td>${r.received}</td><td>${html(r.error || (!r.done ? "Henter …" : r.unstructured ? "Ingen registrerte tilbud" : r.expected === null ? "Antallet kan ikke bekreftes" : r.missing ? r.missing + " mangler i kilden" : r.extra ? r.extra + " flere enn kildens antall" : "Alle registrerte hentet"))}</td></tr>`).join("")}</tbody></table>`;
+    `<table><thead><tr><th>Kjede / avis</th><th>Kildens antall</th><th>Hentet</th><th>Kontroll</th></tr></thead><tbody>${c.catalogs.map((r) => `<tr><td>${html(r.chain)} · ${html(r.title)}${r.localStores?.length ? `<small>${html(localOfferLabel({ locality: { verified: r.localityVerified, stores: r.localStores } }))}</small>` : r.unlocated ? "<small>Butikkadresse mangler; avisen brukes ikke</small>" : "<small>Lokal butikktilknytning venter på kontroll</small>"}</td><td>${r.expected ?? "Ukjent"}</td><td>${r.received}</td><td>${html(r.error || r.locationIssue || (!r.done ? "Henter …" : r.unstructured ? "Ingen registrerte tilbud" : r.expected === null ? "Antallet kan ikke bekreftes" : r.missing ? r.missing + " mangler i kilden" : r.extra ? r.extra + " flere enn kildens antall" : "Alle registrerte hentet"))}</td></tr>`).join("")}</tbody></table>`;
   if (c.cachedCatalogs)
     $("collection-status").textContent +=
       ` ${c.cachedCatalogs} aviser gjenbruker tilbud hentet siste 15 minutter. Avisregisteret er kontrollert på nytt, og avvikene er beholdt. Oppdateringsknappen henter alt på nytt.`;

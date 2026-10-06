@@ -181,6 +181,8 @@ export async function discoverCatalogs(now = new Date()) {
         storeSignatures: [],
         localityVerified: false,
         outsideArea: false,
+        unlocated: false,
+        locationIssue: null,
         offset: 0,
         count: 0,
         ids: [],
@@ -444,6 +446,8 @@ export function collectionCoverage(state) {
       regional: c.regional,
       localStores: c.localStores || [],
       localityVerified: c.localityVerified === true,
+      unlocated: c.unlocated === true,
+      locationIssue: c.locationIssue || null,
     }));
   const done = catalogs.filter((c) => c.done).length;
   const gaps = catalogs.filter(
@@ -467,9 +471,12 @@ export function collectionCoverage(state) {
     missing: catalogs.reduce((n, c) => n + (c.missing || 0), 0),
     extra: catalogs.reduce((n, c) => n + (c.extra || 0), 0),
     gaps: gaps.length,
-    cachedCatalogs: state.catalogs.filter((c) => c.cached).length,
+    cachedCatalogs: state.catalogs.filter(
+      (c) => c.cached && c.localityVerified && c.localStores?.length,
+    ).length,
     catalogsSurveyed: state.catalogs.length,
     catalogsExcluded: state.catalogs.filter((c) => c.outsideArea).length,
+    catalogsUnlocated: state.catalogs.filter((c) => c.unlocated).length,
     locationsPending: state.catalogs.filter(
       (c) => c.phase === "stores" && !c.done,
     ).length,
@@ -619,10 +626,17 @@ export async function stepCollection(env, run, now = new Date()) {
             "Butikkilden har et ukjent format eller støtter ikke paginering.",
           );
         if (!page.length) {
-          if (!c.storeIds.length)
-            throw new Error(
-              "Kilden har ingen butikkadresser for denne avisen.",
-            );
+          if (!c.storeIds.length) {
+            // A valid empty response is a metadata gap, not evidence that
+            // this flyer is out of town. Its products are never fetched.
+            c.unlocated = true;
+            c.locationIssue =
+              "Kilden oppgir ingen butikkadresser. Avisen utelates fra lokale tilbud og planlegging.";
+            c.done = true;
+            c.fetchedAt = now.toISOString();
+            c.offset = 0;
+            continue;
+          }
           c.localityVerified = true;
           c.storesCheckedAt = now.toISOString();
           c.offset = 0;
@@ -921,7 +935,7 @@ export async function collectionResult(env, run, now = new Date()) {
       shoppingArea: LOCAL_AREA_LABEL,
       localityVerified:
         state.version === COLLECTION_VERSION &&
-        coverage.catalogs.every((c) => c.localityVerified),
+        state.catalogs.every((c) => c.localityVerified || c.unlocated),
       coverage,
       historyWeeks: historyPeriods.size,
       historyFrom: dates[0] || null,

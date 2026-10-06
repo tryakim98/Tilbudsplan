@@ -427,14 +427,52 @@ test("local shop membership is paginated to empty even after a short remote-only
   }
 });
 
-test("failed, absent or repeated shop associations do not masquerade as verified local coverage", async () => {
+test("a valid empty shop registry remains an explicit gap and never contributes offers", async () => {
+  const original = globalThis.fetch,
+    mock = sourceMock({ emptyStoresB: true });
+  const { env, sql } = storage();
+  globalThis.fetch = mock.fetch;
+  try {
+    const result = await collect(env, await startCollection(env, now));
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.meta.coverage.catalogsUnlocated, 1);
+    assert.equal(
+      result.meta.coverage.catalogsExcluded,
+      0,
+      "unknown location is not proof of being out of town",
+    );
+    const unknown = result.meta.coverage.catalogs.find(
+      (c) => c.id === "catalog-b",
+    );
+    assert.equal(unknown.localityVerified, false);
+    assert.equal(unknown.unlocated, true);
+    assert.equal(unknown.error, null);
+    assert.match(unknown.locationIssue, /ingen butikkadresser/);
+    assert.ok(
+      result.products.every(
+        (o) => o.publicationId === "catalog-a" && o.locality.verified,
+      ),
+    );
+    assert.equal(isCompleteCollection(result), false);
+    assert.equal(
+      canUsePartialCollection(result),
+      true,
+      "only an explicit incomplete-data choice can use the other verified local flyers",
+    );
+    assert.equal(
+      mock.offsets.some((p) => p.id === "catalog-b"),
+      false,
+    );
+  } finally {
+    globalThis.fetch = original;
+    sql.close();
+  }
+});
+
+test("failed or repeated shop associations do not masquerade as verified local coverage", async () => {
   const original = globalThis.fetch;
   try {
-    for (const options of [
-      { failStoresB: true },
-      { emptyStoresB: true },
-      { repeatedStores: true },
-    ]) {
+    for (const options of [{ failStoresB: true }, { repeatedStores: true }]) {
       const { env, sql } = storage();
       globalThis.fetch = sourceMock(options).fetch;
       try {
