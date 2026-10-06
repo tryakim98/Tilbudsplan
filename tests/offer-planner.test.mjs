@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { TEST_LOCALITY } from "./fixtures.mjs";
 import { INGREDIENTS } from "../dist/recipes.js";
 import {
   emptyProfile,
@@ -34,6 +35,7 @@ function offer(id, overrides = {}) {
     price: 10,
     beforePrice: 20,
     store: "Meny",
+    locality: TEST_LOCALITY,
     structured: true,
     currency: "NOK",
     sourcePack: { quantity: item[2], unit: item[1] },

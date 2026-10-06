@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { TEST_LOCALITY } from "./fixtures.mjs";
 import {
   createOfferCollector,
   isCompleteCollection,
@@ -19,8 +20,12 @@ const coverage = {
 const result = {
   id,
   status: "complete",
-  products: [{ id: "offer" }],
-  meta: { coverage, collectionCompleted: new Date(instant).toISOString() },
+  products: [{ id: "offer", locality: TEST_LOCALITY }],
+  meta: {
+    localityVerified: true,
+    coverage,
+    collectionCompleted: new Date(instant).toISOString(),
+  },
 };
 function storage() {
   const values = new Map();
@@ -41,11 +46,12 @@ test("planning requires complete counts; partial use requires a finished run wit
   const data = {
     ...result,
     meta: {
+      localityVerified: true,
       coverage: {
         ...coverage,
         catalogs: [
-          { done: true, expected: 10, received: 10 },
-          { done: true, expected: 2, received: 2 },
+          { done: true, expected: 10, received: 10, localityVerified: true },
+          { done: true, expected: 2, received: 2, localityVerified: true },
         ],
       },
     },
@@ -67,6 +73,20 @@ test("planning requires complete counts; partial use requires a finished run wit
   data.meta.coverage.catalogs[1].done = false;
   assert.equal(canUsePartialCollection(data), false);
   assert.equal(canUsePartialCollection(null), false);
+  data.meta.coverage.catalogs[1].done = true;
+  data.meta.localityVerified = false;
+  assert.equal(
+    canUsePartialCollection(data),
+    false,
+    "old nationwide collections require a fresh locality check",
+  );
+  data.meta.localityVerified = true;
+  data.products = [{ id: "unchecked" }];
+  assert.equal(
+    canUsePartialCollection(data),
+    false,
+    "a trusted metadata flag cannot authorize an unverified offer",
+  );
 });
 
 test("lost step response retries the same job; a server lease never starts a second collection", async () => {

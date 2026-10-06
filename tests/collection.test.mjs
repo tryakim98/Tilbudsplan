@@ -1,5 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { TEST_LOCALITY } from "./fixtures.mjs";
+import {
+  canUsePartialCollection,
+  isCompleteCollection,
+} from "../dist/collection-client.js";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import worker from "../worker/index.js";
@@ -82,6 +87,8 @@ const catalog = {
   slug: "MENY",
   title: "Uke 41",
   regional: true,
+  localStores: TEST_LOCALITY.stores,
+  localityVerified: true,
   validFrom: cat.run_from,
   validUntil: cat.run_till,
 };
@@ -108,11 +115,54 @@ function sourceMock({
   repeat = false,
   fail = false,
   extraLegacy = false,
+  outsideB = false,
+  failStoresB = false,
+  emptyStoresB = false,
+  lateLocalB = false,
+  repeatedStores = false,
 } = {}) {
   const offsets = [];
+  const storeOffsets = [];
   return {
     offsets,
+    storeOffsets,
     async fetch(url, init = {}) {
+      if (/\/catalogs\/[^/]+\/stores\?/.test(String(url))) {
+        const parsed = new URL(url),
+          id = parsed.pathname.split("/").at(-2),
+          offset = Number(parsed.searchParams.get("offset"));
+        storeOffsets.push({ id, offset });
+        if (failStoresB && id === "catalog-b")
+          return new Response("Failed", { status: 503 });
+        const local = {
+          id: "local-store-" + id,
+          dealer_id: "chain",
+          name: "Meny Fredrikstad",
+          city: "Fredrikstad",
+          country: { id: "NO" },
+        };
+        const remote = {
+          ...local,
+          id: "remote-store-" + id,
+          name: "Meny Oslo",
+          city: "Oslo",
+        };
+        return Response.json(
+          emptyStoresB && id === "catalog-b"
+            ? []
+            : repeatedStores
+              ? [local]
+              : lateLocalB && id === "catalog-b"
+                ? offset === 0
+                  ? [remote]
+                  : offset === 100
+                    ? [local]
+                    : []
+                : offset === 0
+                  ? [outsideB && id === "catalog-b" ? remote : local]
+                  : [],
+        );
+      }
       if (String(url).startsWith("https://squid-api.tjek.com/v2/offers")) {
         const query = new URL(url).searchParams;
         return Response.json(
@@ -312,6 +362,104 @@ test("full collection paginates past short pages, retains unmatched and regional
   }
 });
 
+test("only the exact local flyer is fetched when the same chain has an out-of-town variant", async () => {
+  const original = globalThis.fetch,
+    mock = sourceMock({ outsideB: true });
+  const { env, sql } = storage();
+  globalThis.fetch = mock.fetch;
+  try {
+    const result = await collect(env, await startCollection(env, now));
+    assert.equal(result.status, "complete");
+    assert.equal(result.meta.coverage.catalogsSurveyed, 2);
+    assert.equal(result.meta.coverage.catalogsExcluded, 1);
+    assert.equal(result.meta.coverage.catalogsTotal, 1);
+    assert.equal(result.products.length, 102);
+    assert.ok(
+      result.products.every(
+        (o) => o.publicationId === "catalog-a" && o.locality.verified,
+      ),
+    );
+    assert.equal(
+      mock.offsets.some((p) => p.id === "catalog-b"),
+      false,
+    );
+    assert.equal(isCompleteCollection(result), true);
+    assert.equal(
+      sql
+        .prepare(
+          "SELECT COUNT(*) n FROM flyer_pages WHERE catalog_id='catalog-b'",
+        )
+        .get().n,
+      0,
+    );
+    const cached = await startCollection(env, new Date(now.valueOf() + 60000));
+    assert.equal(cached.status, "complete");
+    assert.equal(cached.coverage.catalogsExcluded, 1);
+  } finally {
+    globalThis.fetch = original;
+    sql.close();
+  }
+});
+
+test("local shop membership is paginated to empty even after a short remote-only page", async () => {
+  const original = globalThis.fetch,
+    mock = sourceMock({ lateLocalB: true });
+  const { env, sql } = storage();
+  globalThis.fetch = mock.fetch;
+  try {
+    const result = await collect(env, await startCollection(env, now));
+    assert.equal(result.status, "complete");
+    assert.equal(result.products.length, 103);
+    assert.deepEqual(
+      mock.storeOffsets
+        .filter((p) => p.id === "catalog-b")
+        .map((p) => p.offset),
+      [0, 100, 200],
+    );
+    assert.equal(
+      result.products.find((o) => o.publicationId === "catalog-b").locality
+        .stores[0].city,
+      "Fredrikstad",
+    );
+  } finally {
+    globalThis.fetch = original;
+    sql.close();
+  }
+});
+
+test("failed, absent or repeated shop associations do not masquerade as verified local coverage", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const options of [
+      { failStoresB: true },
+      { emptyStoresB: true },
+      { repeatedStores: true },
+    ]) {
+      const { env, sql } = storage();
+      globalThis.fetch = sourceMock(options).fetch;
+      try {
+        const result = await collect(env, await startCollection(env, now));
+        assert.equal(result.status, "incomplete");
+        assert.equal(result.meta.localityVerified, false);
+        assert.equal(isCompleteCollection(result), false);
+        assert.equal(canUsePartialCollection(result), false);
+        assert.ok(
+          result.meta.coverage.catalogs.some((c) =>
+            /Lokal gyldighet/.test(c.error || ""),
+          ),
+        );
+        assert.ok(
+          result.products.every((o) => o.publicationId !== "catalog-b"),
+        );
+      } finally {
+        sql.close();
+      }
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("both source interfaces are exhausted even after the modern count is reached", async () => {
   const original = globalThis.fetch;
   const { env, sql } = storage();
@@ -428,6 +576,12 @@ test("public collection has scoped job authentication and rejects cross-origin w
       ).status,
       200,
     );
+    assert.equal(
+      sql.prepare("SELECT COUNT(*) n FROM flyer_pages").get().n,
+      0,
+      "store membership must be verified before any products are fetched",
+    );
+    await collect(env, start);
     assert.ok(sql.prepare("SELECT COUNT(*) n FROM flyer_pages").get().n > 0);
   } finally {
     globalThis.fetch = original;

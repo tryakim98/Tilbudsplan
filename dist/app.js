@@ -25,6 +25,7 @@ import {
   validateProfile,
 } from "./model.js";
 import { chainInfo, comparison, isAdvertisedOffer } from "./offers.js";
+import { isLocalOffer, localOfferLabel, LOCAL_AREA_LABEL } from "./locality.js";
 import {
   createOfferCollector,
   canUsePartialCollection,
@@ -440,17 +441,14 @@ function renderPlan() {
       );
       const locked = s.p.locked.includes(index);
       const meal = meals.find((m) => m.id === id);
-      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy">${r.createdByOffers ? '<span class="recipe-origin">Ny oppskrift fra tilbudene</span>' : ""}<h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}<p class="small-note${meal && meal.percent < OFFER_TARGET ? " error-text" : ""}">${meal ? `${meal.offered} av ${meal.total} handlevarer på tilbud · ${amount(meal.percent)} %` : ""}</p>${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Disse prisene fra avisene er med i retten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="meal-deal"><div><strong>${html(i.offer.name)}</strong><small>${html(i.offer.store_label)} · ${html(i.offer.mengde || "")}</small></div><div><strong>${money(price(i.offer.price))}</strong>${comparison(i.offer).before ? `<small>Før <del>${money(comparison(i.offer).before)}</del> · ${amount(comparison(i.offer).discount)} %</small>` : "<small>Rabatt ikke dokumentert</small>"}${offerTraits(i.offer).organic ? "<small>Merket økologisk</small>" : ""}</div></div>`).join("")}<p class="small-note">Pakningspriser. Hele ukas innkjøp og rester er samlet i handlelisten. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked || s.planning ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
+      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy">${r.createdByOffers ? '<span class="recipe-origin">Ny oppskrift fra tilbudene</span>' : ""}<h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}<p class="small-note${meal && meal.percent < OFFER_TARGET ? " error-text" : ""}">${meal ? `${meal.offered} av ${meal.total} handlevarer på tilbud · ${amount(meal.percent)} %` : ""}</p>${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Disse prisene fra avisene er med i retten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="meal-deal"><div><strong>${html(i.offer.name)}</strong><small>${html(i.offer.store_label)} · ${html(i.offer.mengde || "")}</small><small>${html(localOfferLabel(i.offer))}</small></div><div><strong>${money(price(i.offer.price))}</strong>${comparison(i.offer).before ? `<small>Før <del>${money(comparison(i.offer).before)}</del> · ${amount(comparison(i.offer).discount)} %</small>` : "<small>Rabatt ikke dokumentert</small>"}${offerTraits(i.offer).organic ? "<small>Merket økologisk</small>" : ""}</div></div>`).join("")}<p class="small-note">Pakningspriser. Hele ukas innkjøp og rester er samlet i handlelisten. Se oppgitt lokal butikk og vilkår i kundeavisen.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked || s.planning ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
     })
     .join("");
 }
 function renderOffers() {
-  const all = combinedOffers(s.offers, s.p);
+  const all = combinedOffers(s.offers, s.p).filter(isLocalOffer);
   const stores = [
-    ...new Map([
-      ...(s.meta.chains || []).map((c) => [c.key, c.label]),
-      ...all.map((o) => [o.store_key, o.store_label]),
-    ]).entries(),
+    ...new Map(all.map((o) => [o.store_key, o.store_label])).entries(),
   ].sort((a, b) => a[1].localeCompare(b[1], "nb"));
   $("store-filters").innerHTML = stores
     .map(
@@ -504,7 +502,7 @@ function renderOffers() {
             : a.name.localeCompare(b.name, "nb"),
     );
   $("result-count").textContent =
-    `${offers.length} tilbud/prisvarianter${$("only-matched").checked ? " som passer oppskriftene" : " i oversikten"} · ${all.filter((o) => o.matches.length).length} passer råvareregisteret · ${s.meta.coverage?.chainsWithFlyers || stores.length} kjeder med aviser`;
+    `${offers.length} tilbud/prisvarianter${$("only-matched").checked ? " som passer oppskriftene" : " i oversikten"} · ${all.filter((o) => o.matches.length).length} passer råvareregisteret · ${stores.length} kjeder med lokale tilbud`;
   $("history-summary").textContent = s.meta.historyWeeks
     ? `Prishistorikk: ${s.meta.historyWeeks} registrerte uker, fra ${String(s.meta.historyFrom).slice(0, 10)}. Priser lagres under tilbudshentingen. Årssammenligningen blir bedre etter hvert som flere uker legges til.`
     : "Prishistorikk er ikke tilgjengelig ennå. Vurderingen bruker oppgitt førpris der kilden har det.";
@@ -535,7 +533,7 @@ function renderOffers() {
               : offerActive(o, s.stale)
                 ? "Sjekk gyldighet"
                 : "Kan ikke brukes nå";
-          return `<article class="offer-card${s.p.selected.includes(o.id) ? " is-selected" : ""}${s.p.excluded.includes(o.id) ? " is-excluded" : ""}"><div class="offer-flags"><span class="category-label">${html(o.category === "__top__" ? "Matvare" : o.category)}</span><span class="saving-label">${o.accessKind === "member" ? "Medlemspris" : o.accessKind === "app" ? "Apppris" : state}</span></div><h3 class="offer-title">${html(o.name)}</h3><p class="offer-quantity">${html((o.mengde || "Mengde ikke oppgitt").replace(/førpris.*$/i, "").trim())}</p><p class="offer-price">${c.current ? money(c.current) : o.fromPrice ? "Fra " + money(o.fromPrice) : "Varepris ikke oppgitt"}</p><p class="offer-store">${html(o.store_label)}</p>${offerComparison(o)}${o.manual || o.structured ? `<p class="small-note">${html(o.validFrom || "Ukjent start")} til ${html(o.validUntil || "Ukjent slutt")}${o.member ? " · Din medlemspris" : ""}${o.regional ? " · Lokal/ regional avis: kontroller din butikk" : ""}${o.sourceUrl ? ` · <a href="${html(o.sourceUrl)}" target="_blank" rel="noreferrer">Se kundeavisen</a>` : ""}</p>` : ""}${!o.matches.length ? '<p class="small-note">Ingen passende oppskrift i råvareregisteret ennå.</p>' : ""}<div class="offer-actions"><button class="choose-offer" data-offer="${html(o.id)}" ${!active ? "disabled" : ""} aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter i planen"}</button><button class="exclude-offer" data-exclude="${html(o.id)}" aria-label="Ikke bruk ${html(o.name)}" aria-pressed="${s.p.excluded.includes(o.id)}">${s.p.excluded.includes(o.id) ? "↺" : "×"}</button></div>${o.manual ? `<button class="text-button" data-remove-offer="${o.id}">Slett mitt tilbud</button>` : ""}</article>`;
+          return `<article class="offer-card${s.p.selected.includes(o.id) ? " is-selected" : ""}${s.p.excluded.includes(o.id) ? " is-excluded" : ""}"><div class="offer-flags"><span class="category-label">${html(o.category === "__top__" ? "Matvare" : o.category)}</span><span class="saving-label">${o.accessKind === "member" ? "Medlemspris" : o.accessKind === "app" ? "Apppris" : state}</span></div><h3 class="offer-title">${html(o.name)}</h3><p class="offer-quantity">${html((o.mengde || "Mengde ikke oppgitt").replace(/førpris.*$/i, "").trim())}</p><p class="offer-price">${c.current ? money(c.current) : o.fromPrice ? "Fra " + money(o.fromPrice) : "Varepris ikke oppgitt"}</p><p class="offer-store">${html(o.store_label)}</p><p class="small-note">${html(localOfferLabel(o))}</p>${offerComparison(o)}${o.manual || o.structured ? `<p class="small-note">${html(o.validFrom || "Ukjent start")} til ${html(o.validUntil || "Ukjent slutt")}${o.member ? " · Din medlemspris" : ""}${o.sourceUrl ? ` · <a href="${html(o.sourceUrl)}" target="_blank" rel="noreferrer">Se kundeavisen</a>` : ""}</p>` : ""}${!o.matches.length ? '<p class="small-note">Ingen passende oppskrift i råvareregisteret ennå.</p>' : ""}<div class="offer-actions"><button class="choose-offer" data-offer="${html(o.id)}" ${!active ? "disabled" : ""} aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter i planen"}</button><button class="exclude-offer" data-exclude="${html(o.id)}" aria-label="Ikke bruk ${html(o.name)}" aria-pressed="${s.p.excluded.includes(o.id)}">${s.p.excluded.includes(o.id) ? "↺" : "×"}</button></div>${o.manual ? `<button class="text-button" data-remove-offer="${o.id}">Slett mitt tilbud</button>` : ""}</article>`;
         })
         .join("")
     : '<div class="empty-state"><h3>Ingen tilbud passer</h3><p>Prøv et annet søk eller legg inn et tilbud fra en kjede.</p></div>';
@@ -574,7 +572,7 @@ function renderDealStart() {
             .map((o) => {
               const c = comparison(o),
                 traits = offerTraits(o);
-              return `<article class="start-deal"><span>${traits.luxury ? "Luksusråvare" : "Tilbudsgrunnlag"}${traits.organic ? " · økologisk" : ""}</span><h4>${html(o.name)}</h4><p>${html(o.store_label)} · ${html(o.mengde || "")}</p><strong>${money(c.current)}</strong>${c.before ? `<small>Før <del>${money(c.before)}</del> · ${amount(c.discount)} % lavere</small>` : "<small>Førpris mangler</small>"}<small>${html(c.rating)}</small><button class="text-button" data-offer="${html(o.id)}" aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter råvaren"}</button></article>`;
+              return `<article class="start-deal"><span>${traits.luxury ? "Luksusråvare" : "Tilbudsgrunnlag"}${traits.organic ? " · økologisk" : ""}</span><h4>${html(o.name)}</h4><p>${html(o.store_label)} · ${html(o.mengde || "")}</p><small>${html(localOfferLabel(o))}</small><strong>${money(c.current)}</strong>${c.before ? `<small>Før <del>${money(c.before)}</del> · ${amount(c.discount)} % lavere</small>` : "<small>Førpris mangler</small>"}<small>${html(c.rating)}</small><button class="text-button" data-offer="${html(o.id)}" aria-pressed="${s.p.selected.includes(o.id)}">${s.p.selected.includes(o.id) ? "Prioritert ✓" : "Prioriter råvaren"}</button></article>`;
             })
             .join("")}</div>`
         : ""
@@ -608,7 +606,7 @@ function renderList() {
     ? [...groups]
         .map(
           ([group, list]) =>
-            `<section class="list-section"><h3>${html(group)}</h3><ul class="list-items">${list.map((i) => `<li class="shopping-item${s.p.checked.includes(i.id) ? " is-checked" : ""}${i.need === 0 ? " at-home" : ""}"><label>${i.need > 0 ? `<input type="checkbox" data-checked="${i.id}" aria-label="Har handlet ${html(i.name)}" ${s.p.checked.includes(i.id) ? "checked" : ""}>` : '<span aria-label="Har hjemme">✓</span>'}<span><strong>${html(i.name)}</strong><small>Til rettene: ${amount(i.quantity)} ${i.unit}${i.atHome ? ` · ${amount(i.atHome)} ${i.unit} hjemme` : ""}</small>${i.need > 0 ? `<small>Kjøp ${i.packs} × ${amount(i.size)} ${i.unit}${i.leftover ? ` · ${amount(i.leftover)} ${i.unit} til overs` : ""}</small>` : ""}${i.offer ? `<small>${html(i.offer.name)} · ${i.offer.manual ? "eget tilbud" : i.onOffer ? "sjekk gyldighet" : "fast pris, teller ikke som tilbud"}${offerTraits(i.offer).organic ? " · merket økologisk" : ""}</small>${comparison(i.offer).before ? `<small>Pakning ${money(price(i.offer.price))}, før ${money(comparison(i.offer).before)} · ${amount(comparison(i.offer).discount)} % lavere</small>` : "<small>Førpris ikke oppgitt</small>"}` : ""}</span><span class="item-price">${money(i.cost)}<small>${i.need === 0 ? "Hjemme" : i.offer ? (i.onOffer ? "Tilbudspris" : "Fast pris") : "Anslag"}</small></span></label>${i.offer?.sourceUrl ? `<a class="list-source" href="${html(i.offer.sourceUrl)}" target="_blank" rel="noreferrer">Kontroller pris og lokal gyldighet i avisen</a>` : ""}</li>`).join("")}</ul></section>`,
+            `<section class="list-section"><h3>${html(group)}</h3><ul class="list-items">${list.map((i) => `<li class="shopping-item${s.p.checked.includes(i.id) ? " is-checked" : ""}${i.need === 0 ? " at-home" : ""}"><label>${i.need > 0 ? `<input type="checkbox" data-checked="${i.id}" aria-label="Har handlet ${html(i.name)}" ${s.p.checked.includes(i.id) ? "checked" : ""}>` : '<span aria-label="Har hjemme">✓</span>'}<span><strong>${html(i.name)}</strong><small>Til rettene: ${amount(i.quantity)} ${i.unit}${i.atHome ? ` · ${amount(i.atHome)} ${i.unit} hjemme` : ""}</small>${i.need > 0 ? `<small>Kjøp ${i.packs} × ${amount(i.size)} ${i.unit}${i.leftover ? ` · ${amount(i.leftover)} ${i.unit} til overs` : ""}</small>` : ""}${i.offer ? `<small>${html(i.offer.name)} · ${i.offer.manual ? "eget tilbud" : i.onOffer ? "lokalt tilbud" : "fast pris, teller ikke som tilbud"}${offerTraits(i.offer).organic ? " · merket økologisk" : ""}</small><small>${html(localOfferLabel(i.offer))}</small>${comparison(i.offer).before ? `<small>Pakning ${money(price(i.offer.price))}, før ${money(comparison(i.offer).before)} · ${amount(comparison(i.offer).discount)} % lavere</small>` : "<small>Førpris ikke oppgitt</small>"}` : ""}</span><span class="item-price">${money(i.cost)}<small>${i.need === 0 ? "Hjemme" : i.offer ? (i.onOffer ? "Tilbudspris" : "Fast pris") : "Anslag"}</small></span></label>${i.offer?.sourceUrl ? `<a class="list-source" href="${html(i.offer.sourceUrl)}" target="_blank" rel="noreferrer">Se pris og vilkår i kundeavisen</a>` : ""}</li>`).join("")}</ul></section>`,
         )
         .join("")
     : '<div class="empty-state"><h3>Ingen middager ennå</h3><p>Lag en ukeplan eller legg til retter fra kokeboka.</p><button class="primary-button" data-view="cookbook">Finn oppskrifter</button></div>';
@@ -853,6 +851,10 @@ function applyOfferData(data, fromCollection = false) {
   $("data-warning").textContent = s.meta.sourceError
     ? "Kilden kunne ikke oppdateres. Viser siste lagrede data. " + warning
     : warning;
+  $("data-warning").textContent +=
+    s.meta.localityVerified === true
+      ? ` Handleområde: ${LOCAL_AREA_LABEL}. Bare aviser med bekreftet lokal butikktilknytning brukes.`
+      : " Tilbud uten bekreftet lokal gyldighet brukes ikke. Hent og kontroller lokale tilbud fra Tilbud-fanen.";
   if (s.meta.historyError)
     $("data-warning").textContent +=
       " Nye priser kunne ikke lagres i historikken. Tidligere uker er beholdt.";
@@ -877,27 +879,30 @@ function renderCollection(result) {
   $("collection-panel").hidden = false;
   const c = result.coverage;
   if (!c) return;
-  $("collection-progress").max = c.catalogsTotal || 1;
-  $("collection-progress").value = c.catalogsDone;
+  $("collection-progress").max = c.catalogsSurveyed || c.catalogsTotal || 1;
+  $("collection-progress").value = c.catalogsDone + (c.catalogsExcluded || 0);
   const running = result.status === "collecting" || result.status === "busy";
   const ended = c.catalogsDone === c.catalogsTotal;
   const errors = c.catalogs.filter((r) => r.error).length;
   $("collection-status").textContent = running
-    ? `Henter alle tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
+    ? `${c.locationsPending ? `Kontrollerer butikktilknytningen for ${c.locationsPending} aviser. ` : ""}Henter lokale tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aktuelle aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
     : c.complete
-      ? `Kontrollert: ${c.offersFetched} registrerte tilbud i ${c.catalogsTotal} aviser fra ${c.chainsWithFlyers} kjeder. ${c.surveyedChains} kjeder undersøkt.`
+      ? `Kontrollert: ${c.offersFetched} registrerte lokale tilbud i ${c.catalogsTotal} aviser fra ${c.chainsWithFlyers} kjeder. ${c.surveyedChains} kjeder undersøkt.`
       : `Henting ${ended ? "avsluttet" : "uferdig"}: ${c.catalogsDone} av ${c.catalogsTotal} avisvarianter gjennomgått · ${c.offersFetched} tilbud lest. Dekningen er ufullstendig: ${c.gaps} avisvarianter med avvik og antallsavvik på ${c.missing}${c.extra ? ` · ${c.extra} flere registrerte enn oppgitt` : ""}.${errors ? ` ${errors} avisvarianter har hente- eller lagringsfeil.` : ""}`;
   $("collection-next").hidden = running || !ended || c.complete;
   if (ended && !c.complete)
     $("collection-next").textContent = errors
-      ? "Noen tilbud kunne ikke hentes eller kontrolleres. Ingen ny ukeplan er laget. Hent og kontroller alle tilbud på nytt fra Tilbud-fanen."
+      ? "Noen tilbud kunne ikke hentes eller kontrolleres. Ingen ny ukeplan er laget. Hent og kontroller lokale tilbud på nytt fra Tilbud-fanen."
       : "Kildens oppgitte antall kan ikke bekreftes. Automatisk planlegging er stoppet, og den eksisterende planen er beholdt. Du kan uttrykkelig velge å bruke et ufullstendig grunnlag. 80 %-kravet og budsjettet gjelder fortsatt. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
   $("collection-panel").classList.toggle(
     "has-gaps",
     !c.complete && result.status !== "collecting",
   );
+  if (c.catalogsSurveyed)
+    $("collection-status").textContent +=
+      ` ${c.catalogsSurveyed} aviser ${running ? "undersøkes" : "er undersøkt"}; ${c.catalogsExcluded} er utelatt fordi de gjelder butikker utenfor handleområdet.`;
   $("collection-table").innerHTML =
-    `<table><thead><tr><th>Kjede / avis</th><th>Kildens antall</th><th>Hentet</th><th>Kontroll</th></tr></thead><tbody>${c.catalogs.map((r) => `<tr><td>${html(r.chain)} · ${html(r.title)}${r.regional ? "<small>Regional variant</small>" : ""}</td><td>${r.expected ?? "Ukjent"}</td><td>${r.received}</td><td>${html(r.error || (!r.done ? "Henter …" : r.unstructured ? "Ingen registrerte tilbud" : r.expected === null ? "Antallet kan ikke bekreftes" : r.missing ? r.missing + " mangler i kilden" : r.extra ? r.extra + " flere enn kildens antall" : "Alle registrerte hentet"))}</td></tr>`).join("")}</tbody></table>`;
+    `<table><thead><tr><th>Kjede / avis</th><th>Kildens antall</th><th>Hentet</th><th>Kontroll</th></tr></thead><tbody>${c.catalogs.map((r) => `<tr><td>${html(r.chain)} · ${html(r.title)}${r.localStores?.length ? `<small>${html(localOfferLabel({ locality: { verified: r.localityVerified, stores: r.localStores } }))}</small>` : "<small>Lokal butikktilknytning venter på kontroll</small>"}</td><td>${r.expected ?? "Ukjent"}</td><td>${r.received}</td><td>${html(r.error || (!r.done ? "Henter …" : r.unstructured ? "Ingen registrerte tilbud" : r.expected === null ? "Antallet kan ikke bekreftes" : r.missing ? r.missing + " mangler i kilden" : r.extra ? r.extra + " flere enn kildens antall" : "Alle registrerte hentet"))}</td></tr>`).join("")}</tbody></table>`;
   if (c.cachedCatalogs)
     $("collection-status").textContent +=
       ` ${c.cachedCatalogs} aviser gjenbruker tilbud hentet siste 15 minutter. Avisregisteret er kontrollert på nytt, og avvikene er beholdt. Oppdateringsknappen henter alt på nytt.`;
@@ -972,7 +977,7 @@ async function collectAllOffers(force = false) {
     $("collection-next").hidden = false;
     $("collection-next").textContent = offerCollector.pending
       ? "Tilbud som allerede er hentet, er lagret. Trykk «Fortsett henting» for å prøve igjen fra samme sted. Ukeplanen din er beholdt."
-      : "Trykk «Hent og kontroller alle tilbud» i Tilbud for å prøve igjen. Ukeplanen din er beholdt.";
+      : "Trykk «Hent og kontroller lokale tilbud» i Tilbud for å prøve igjen. Ukeplanen din er beholdt.";
     toast("Tilbudshentingen ble avbrutt. Se meldingen over ukeplanen.");
     return false;
   } finally {
@@ -1359,7 +1364,7 @@ $("copy-list").addEventListener("click", () => {
       items
         .map(
           (i) =>
-            `☐ ${i.name}: ${amount(i.need)} ${i.unit} mangler (kjøp ${i.packs} × ${amount(i.size)} ${i.unit}, ${money(i.cost)} ${i.offer ? i.offer.store_label + (i.onOffer ? ", tilbud, sjekk gyldighet" : ", fast pris") : "anslag"})`,
+            `☐ ${i.name}: ${amount(i.need)} ${i.unit} mangler (kjøp ${i.packs} × ${amount(i.size)} ${i.unit}, ${money(i.cost)} ${i.offer ? i.offer.store_label + (i.onOffer ? ", tilbud, " + localOfferLabel(i.offer) : ", fast pris, " + localOfferLabel(i.offer)) : "anslag"})`,
         )
         .join("\n"),
     "Handlelisten er kopiert",

@@ -7,12 +7,13 @@ import {
 } from "../dist/offers.js";
 import { localDate } from "../dist/model.js";
 import { buildHistory } from "./offers.js";
+import { areaForStore, LOCAL_AREA_LABEL } from "../dist/locality.js";
 
 const SITE = "https://etilbudsavis.no/";
 const API = "https://squid-api.tjek.com/v2/";
 const LIMIT = 100;
 const BATCH = 4;
-const COLLECTION_VERSION = 2;
+const COLLECTION_VERSION = 3;
 const day = 86400000;
 const keyHash = async (key) =>
   [
@@ -174,7 +175,12 @@ export async function discoverCatalogs(now = new Date()) {
         validFrom: c.run_from,
         validUntil: c.run_till,
         regional: c.all_stores !== true,
-        phase: "modern",
+        phase: "stores",
+        localStores: [],
+        storeIds: [],
+        storeSignatures: [],
+        localityVerified: false,
+        outsideArea: false,
         offset: 0,
         count: 0,
         ids: [],
@@ -262,6 +268,11 @@ export function normalizeSourceOffer(o, c) {
     publicationId: c.id,
     publicationTitle: c.title,
     regional: c.regional,
+    locality: {
+      verified: c.localityVerified === true,
+      stores: c.localStores || [],
+      checkedAt: c.storesCheckedAt || null,
+    },
     merknad: o.description || "",
     fromPrice: parsePrice(o.fromPrice),
     advertisedDiscount:
@@ -417,22 +428,27 @@ async function sourcePages(todo) {
 }
 
 export function collectionCoverage(state) {
-  const catalogs = state.catalogs.map((c) => ({
-    id: c.id,
-    chain: c.label,
-    title: c.title,
-    expected: c.expected,
-    received: c.count,
-    done: c.done,
-    error: c.error,
-    missing: c.expected === null ? null : Math.max(0, c.expected - c.count),
-    extra: c.expected === null ? null : Math.max(0, c.count - c.expected),
-    unstructured: c.done && c.count === 0,
-    regional: c.regional,
-  }));
+  const catalogs = state.catalogs
+    .filter((c) => !c.outsideArea)
+    .map((c) => ({
+      id: c.id,
+      chain: c.label,
+      title: c.title,
+      expected: c.expected,
+      received: c.count,
+      done: c.done,
+      error: c.error,
+      missing: c.expected === null ? null : Math.max(0, c.expected - c.count),
+      extra: c.expected === null ? null : Math.max(0, c.count - c.expected),
+      unstructured: c.done && c.count === 0,
+      regional: c.regional,
+      localStores: c.localStores || [],
+      localityVerified: c.localityVerified === true,
+    }));
   const done = catalogs.filter((c) => c.done).length;
   const gaps = catalogs.filter(
     (c) =>
+      !c.localityVerified ||
       c.error ||
       c.unstructured ||
       c.expected === null ||
@@ -442,7 +458,9 @@ export function collectionCoverage(state) {
     complete:
       catalogs.length > 0 && done === catalogs.length && gaps.length === 0,
     surveyedChains: state.chains.length,
-    chainsWithFlyers: new Set(state.catalogs.map((c) => c.chain)).size,
+    chainsWithFlyers: new Set(
+      state.catalogs.filter((c) => c.localStores?.length).map((c) => c.chain),
+    ).size,
     catalogsTotal: catalogs.length,
     catalogsDone: done,
     offersFetched: catalogs.reduce((n, c) => n + c.received, 0),
@@ -450,9 +468,16 @@ export function collectionCoverage(state) {
     extra: catalogs.reduce((n, c) => n + (c.extra || 0), 0),
     gaps: gaps.length,
     cachedCatalogs: state.catalogs.filter((c) => c.cached).length,
+    catalogsSurveyed: state.catalogs.length,
+    catalogsExcluded: state.catalogs.filter((c) => c.outsideArea).length,
+    locationsPending: state.catalogs.filter(
+      (c) => c.phase === "stores" && !c.done,
+    ).length,
     catalogs,
     scope:
-      "Publiserte tilbudsaviser hos norske dagligvarekjeder i eTilbudsavis. Alle regionale varianter hentes. Kilden kan mangle trykte tilbud eller hele kjeder.",
+      "Tilbudsaviser knyttet til butikker i " +
+      LOCAL_AREA_LABEL +
+      ". Alle registrerte kjeder og avisvarianter undersøkes; aviser for andre steder utelates. Kilden kan mangle trykte tilbud eller butikker.",
   };
 }
 
@@ -527,9 +552,14 @@ export async function startCollection(env, now = new Date(), force = false) {
 }
 export async function authorizedRun(env, id, key) {
   if (!/^[a-f0-9]{48}$/.test(key || "")) return null;
-  return env.DB.prepare("SELECT * FROM offer_runs WHERE id=? AND key_hash=?")
+  const run = await env.DB.prepare(
+    "SELECT * FROM offer_runs WHERE id=? AND key_hash=?",
+  )
     .bind(id, await keyHash(key))
     .first();
+  return run && JSON.parse(run.state).version === COLLECTION_VERSION
+    ? run
+    : null;
 }
 
 export async function stepCollection(env, run, now = new Date()) {
@@ -553,13 +583,102 @@ export async function stepCollection(env, run, now = new Date()) {
   const state = JSON.parse(run.state);
   try {
     const waiting = state.catalogs.filter((c) => !c.done);
+    const storeTodo = waiting
+      .filter((c) => c.phase === "stores")
+      .slice(0, BATCH);
     const todo = [
       ...waiting.filter((c) => c.phase === "modern").slice(0, 12),
       ...waiting
         .filter((c) => c.phase === "legacy")
         .slice(0, waiting.some((c) => c.phase === "modern") ? 3 : BATCH),
     ];
-    const answers = await sourcePages(todo);
+    const [answers, storeAnswers] = await Promise.all([
+      sourcePages(todo),
+      Promise.allSettled(
+        storeTodo.map(async (c) => {
+          const url = new URL(
+            "catalogs/" + encodeURIComponent(c.id) + "/stores",
+            API,
+          );
+          url.search = new URLSearchParams({
+            limit: String(LIMIT),
+            offset: String(c.offset),
+          });
+          return JSON.parse(await source(url));
+        }),
+      ),
+    ]);
+    for (let i = 0; i < storeTodo.length; i++) {
+      const c = storeTodo[i],
+        answer = storeAnswers[i];
+      try {
+        if (answer.status !== "fulfilled") throw answer.reason;
+        const page = answer.value;
+        if (!Array.isArray(page) || page.length > LIMIT)
+          throw new Error(
+            "Butikkilden har et ukjent format eller støtter ikke paginering.",
+          );
+        if (!page.length) {
+          if (!c.storeIds.length)
+            throw new Error(
+              "Kilden har ingen butikkadresser for denne avisen.",
+            );
+          c.localityVerified = true;
+          c.storesCheckedAt = now.toISOString();
+          c.offset = 0;
+          if (c.localStores.length) c.phase = "modern";
+          else {
+            c.outsideArea = true;
+            c.done = true;
+            c.fetchedAt = now.toISOString();
+          }
+          continue;
+        }
+        if (
+          page.some(
+            (s) =>
+              typeof s.id !== "string" ||
+              s.dealer_id !== c.sourceId ||
+              typeof s.city !== "string" ||
+              !s.city.trim() ||
+              typeof s.country?.id !== "string",
+          )
+        )
+          throw new Error(
+            "Avisen kunne ikke knyttes til sikre butikkadresser.",
+          );
+        const signature = page
+          .map((s) => s.id)
+          .sort()
+          .join("|");
+        if (c.storeSignatures.includes(signature) || c.offset >= 10000)
+          throw new Error(
+            "Butikkilden gjentar sider eller overskrider kapasiteten.",
+          );
+        c.storeSignatures.push(signature);
+        const seen = new Set(c.storeIds);
+        for (const s of page) {
+          if (seen.has(s.id)) continue;
+          seen.add(s.id);
+          const area = areaForStore(s);
+          if (area)
+            c.localStores.push({
+              id: s.id,
+              area,
+              name: String(s.name || c.label + " " + s.city).slice(0, 150),
+              city: s.city.slice(0, 80),
+              street: String(s.street || "").slice(0, 150),
+              postcode: String(s.zip_code || "").slice(0, 10),
+            });
+        }
+        c.storeIds = [...seen];
+        c.offset += LIMIT;
+      } catch (error) {
+        c.error = "Lokal gyldighet kunne ikke kontrolleres: " + error.message;
+        c.done = true;
+        c.fetchedAt = now.toISOString();
+      }
+    }
     const writes = [];
     const observations = new Map();
     const period = isoPeriod(now.toISOString());
@@ -794,7 +913,15 @@ export async function collectionResult(env, run, now = new Date()) {
       collectionCompleted: run.completed_at,
       week: isoPeriod(run.started_at)?.split("W")[1],
       source: "eTilbudsavis",
-      chains: state.chains,
+      chains: state.chains.filter((chain) =>
+        state.catalogs.some(
+          (c) => c.chain === chain.key && c.localStores?.length,
+        ),
+      ),
+      shoppingArea: LOCAL_AREA_LABEL,
+      localityVerified:
+        state.version === COLLECTION_VERSION &&
+        coverage.catalogs.every((c) => c.localityVerified),
       coverage,
       historyWeeks: historyPeriods.size,
       historyFrom: dates[0] || null,

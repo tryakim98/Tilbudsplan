@@ -1,5 +1,6 @@
 import { INGREDIENTS } from "./recipes.js";
 import { catalog, emptyProfile, withDefaults, localDate } from "./model.js";
+import { isLocalOffer } from "./locality.js";
 import {
   chainInfo,
   priceBasis,
@@ -195,6 +196,7 @@ export function availableOffers(offers, p, stale) {
   return combinedOffers(offers, p).filter(
     (o) =>
       offerActive(o, stale, today) &&
+      isLocalOffer(o) &&
       o.matches.length > 0 &&
       (o.accessKind !== "member" || p.memberChains?.includes(o.store_key)) &&
       (o.accessKind !== "app" || p.appChains?.includes(o.store_key)) &&

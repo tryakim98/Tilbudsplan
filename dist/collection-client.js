@@ -1,4 +1,5 @@
 import { localDate } from "./model.js";
+import { isLocalOffer } from "./locality.js";
 
 const STORAGE_KEY = "tilbudsplan:collection-job";
 const JOB_LIFETIME = 3600000;
@@ -6,17 +7,22 @@ export function canUsePartialCollection(data) {
   const c = data?.meta?.coverage;
   return !!(
     data?.status === "incomplete" &&
+    data.meta?.localityVerified === true &&
     data.products?.length > 0 &&
+    data.products.every(isLocalOffer) &&
     c?.catalogsTotal > 0 &&
     c.catalogsDone === c.catalogsTotal &&
     c.catalogs?.length === c.catalogsTotal &&
-    c.catalogs.every((r) => r.done && !r.error)
+    c.catalogs.every((r) => r.done && !r.error && r.localityVerified === true)
   );
 }
 export function isCompleteCollection(data) {
   const c = data?.meta?.coverage;
   return !!(
     data?.status === "complete" &&
+    data.meta?.localityVerified === true &&
+    data.products?.length > 0 &&
+    data.products.every(isLocalOffer) &&
     c?.complete === true &&
     c.catalogsTotal > 0 &&
     c.catalogsDone === c.catalogsTotal &&
@@ -24,6 +30,7 @@ export function isCompleteCollection(data) {
     c.catalogs.every(
       (r) =>
         r.done &&
+        r.localityVerified === true &&
         !r.error &&
         !r.unstructured &&
         Number.isInteger(r.expected) &&

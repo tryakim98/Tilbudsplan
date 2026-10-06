@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { localTestOffer } from "./fixtures.mjs";
 import { RECIPES, INGREDIENTS } from "../dist/recipes.js";
 import {
   emptyProfile,
@@ -24,6 +25,8 @@ import {
   validCustomRecipe,
   validManualOffer,
 } from "../dist/model.js";
+const cleanLocalOffers = (products) =>
+  cleanOffers(products.map(localTestOffer));
 test("every recipe has complete ingredients and steps", () => {
   assert.equal(new Set(RECIPES.map((r) => r.id)).size, RECIPES.length);
   for (const r of RECIPES) {
@@ -116,7 +119,7 @@ test("shopping quantities sum across meals and round whole packages", () => {
 });
 test("store restrictions and stale data honored in cost calculation", () => {
   const p = { ...emptyProfile(), plan: ["sticky-chicken"], stores: ["a"] };
-  const offers = cleanOffers([
+  const offers = cleanLocalOffers([
     {
       name: "Kyllingfilet",
       mengde: "400 g",
@@ -214,7 +217,7 @@ test("own offers work with stale source data, with date and membership checks", 
 });
 test("store choice compares total packages rather than number of offers", () => {
   const p = { ...emptyProfile(), plan: ["sticky-chicken"], maxStores: 1 };
-  const offers = cleanOffers([
+  const offers = cleanLocalOffers([
     { name: "Kyllingfilet", mengde: "400 g", price: "80", store: "A" },
     { name: "Kyllingfilet", mengde: "600 g", price: "90", store: "A" },
     { name: "Kyllingfilet", mengde: "400 g", price: "10", store: "B" },

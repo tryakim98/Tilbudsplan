@@ -3,6 +3,7 @@ const files = {
   "index.html": "text/html; charset=utf-8",
   "app.js": "text/javascript; charset=utf-8",
   "collection-client.js": "text/javascript; charset=utf-8",
+  "locality.js": "text/javascript; charset=utf-8",
   "offer-planner.js": "text/javascript; charset=utf-8",
   "recipes.js": "text/javascript; charset=utf-8",
   "engine.js": "text/javascript; charset=utf-8",
@@ -32,7 +33,7 @@ writeFileSync(
       .replace("./offers.js", "./offers-worker.js")
       .replace("../dist/model.js", "./model.js"),
 );
-for (const file of ["model.js", "recipes.js", "offers.js"])
+for (const file of ["model.js", "recipes.js", "offers.js", "locality.js"])
   writeFileSync("dist/server/" + file, readFileSync("dist/" + file));
 writeFileSync(
   "dist/server/offers-worker.js",
@@ -46,6 +47,7 @@ writeFileSync(
   readFileSync("worker/collection.js", "utf8")
     .replace("../dist/offers.js", "./offers.js")
     .replace("../dist/model.js", "./model.js")
+    .replace("../dist/locality.js", "./locality.js")
     .replace(
       'import { buildHistory } from "./offers.js";',
       'import { buildHistory } from "./offers-worker.js";',

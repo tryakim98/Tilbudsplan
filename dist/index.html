@@ -85,9 +85,10 @@
         ></progress>
         <p id="collection-activity" class="small-note" hidden></p>
         <p class="small-note">
-          Henter alle registrerte tilbud i alle publiserte avisvarianter fra
-          norske dagligvarekjeder i eTilbudsavis. Trykte tilbud som mangler i
-          kildens data kan ikke garanteres.
+          Handleområde: Fredrikstad, Sarpsborg og Mysen med nærområder. Hver
+          avis kontrolleres mot butikkadressene i kilden. Bare aviser som
+          gjelder lokale butikker brukes. Trykte tilbud som mangler i kildens
+          data kan ikke garanteres.
         </p>
         <details id="collection-details">
           <summary>Se dekning per tilbudsavis</summary>
@@ -211,7 +212,7 @@
             og tilberedning</label
           >
           <button class="secondary-button" id="offer-week">
-            Lag 7 varierte middager fra alle kjeder
+            Lag 7 varierte middager fra lokale tilbud
           </button>
           <label class="check-label"
             ><input type="checkbox" id="allow-repeats" />Tillat samme middag
@@ -268,12 +269,16 @@
         <div class="view-heading">
           <div>
             <p class="section-kicker">Råvarene først</p>
-            <h2 id="offers-heading">Hele tilbudsoversikten</h2>
+            <h2 id="offers-heading">Tilbud i handleområdet</h2>
+            <p class="small-note">
+              Fredrikstad, Sarpsborg og Mysen med nærområder, inkludert blant
+              annet Rolvsøy, Kråkerøy, Borgenhaugen og Slitu.
+            </p>
             <p id="source-updated"></p>
             <p id="history-summary" class="small-note"></p>
           </div>
           <button id="refresh-data" class="secondary-button">
-            Hent og kontroller alle tilbud
+            Hent og kontroller lokale tilbud
           </button>
         </div>
         <details class="entry-panel">
@@ -281,6 +286,8 @@
           <p>
             Oppgi prisen for én pakning, datoene og riktig råvare. Tilbudet
             lagres bare i din profil. For bønner og kikerter: oppgi avrent vekt.
+            Registrer bare tilbud som gjelder i Fredrikstad, Sarpsborg eller
+            Mysen med nærområder.
           </p>
           <form id="offer-form" class="entry-form">
             <label>Råvare<select id="offer-ingredient" required></select></label
@@ -357,8 +364,8 @@
             <fieldset>
               <legend>Kjeder i planen</legend>
               <p class="small-note">
-                Ingen avkrysset betyr alle kjeder i kilden. Kontroller at
-                tilbudet gjelder din lokale butikk.
+                Ingen avkrysset betyr alle kjeder med tilbud som gjelder i
+                Fredrikstad, Sarpsborg og Mysen med nærområder.
               </p>
               <div id="store-filters" class="filter-list"></div>
             </fieldset>
@@ -378,14 +385,15 @@
               <strong>Om prisene</strong>
               <p>
                 Nye tilbud hentes direkte fra eTilbudsavis. Eldre historikk kan
-                også komme fra Olewol/tilbudsavis. Tilgjengelighet og lokal
-                gyldighet er ikke verifisert.
+                også komme fra Olewol/tilbudsavis. Avisen må være knyttet til
+                minst én butikk i handleområdet. Kontroller lager og vilkår hos
+                den oppgitte butikken.
               </p>
               <p>
                 Førpris er oppgitt i annonsen eller utledet fra «spar».
                 Tilbudssnittet regnes fra observerte tilbudsuker i samme kjede
                 og pakning siste 365 dager. Det er ikke et snitt av alle
-                butikkpriser.
+                butikkpriser og kan inkludere andre butikker i kjeden.
               </p>
               <a
                 href="https://etilbudsavis.no/"

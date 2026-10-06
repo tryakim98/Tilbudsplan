@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { TEST_LOCALITY } from "./fixtures.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
@@ -16,6 +17,7 @@ function freshOffersFixture() {
       price: item[3],
       beforePrice: item[3] * 1.5,
       store: "Meny",
+      locality: TEST_LOCALITY,
       store_key: "meny",
       structured: true,
       currency: "NOK",
@@ -24,7 +26,14 @@ function freshOffersFixture() {
       validFrom: localDate(),
       validUntil: localDate(),
     }));
-  return { meta: { generated: new Date().toISOString(), week: 41 }, products };
+  return {
+    meta: {
+      generated: new Date().toISOString(),
+      week: 41,
+      localityVerified: true,
+    },
+    products,
+  };
 }
 const sql = new DatabaseSync(":memory:");
 sql.exec(
@@ -132,6 +141,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
         expected: offersFixture.products.length,
         received: offersFixture.products.length,
         done: true,
+        localityVerified: true,
         missing: 0,
       },
     ],
@@ -183,6 +193,31 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
         },
       });
     }
+    if (String(url) === "/api/offers")
+      return Response.json({
+        ...offersFixture,
+        products: [
+          ...offersFixture.products,
+          {
+            ...offersFixture.products[0],
+            id: "remote",
+            name: "Kun i Oslo",
+            price: 1,
+            locality: {
+              verified: true,
+              stores: [
+                { id: "oslo", area: "oslo", city: "Oslo", name: "Meny Oslo" },
+              ],
+            },
+          },
+          {
+            ...offersFixture.products[0],
+            id: "unverified",
+            name: "Ubekreftet butikk",
+            locality: undefined,
+          },
+        ],
+      });
     return String(url).includes("/api/profile")
       ? api(
           opts.method || "GET",
@@ -207,6 +242,13 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
     e.dispatchEvent(new window.Event("change", { bubbles: true }));
   await import("../dist/app.js");
   await wait(25);
+  click('[data-view="offers"]');
+  assert.ok(document.querySelectorAll(".offer-card").length > 0);
+  assert.ok(
+    $("offers-grid").textContent.includes("Gjelder hos Meny Fredrikstad"),
+  );
+  assert.ok(!$("offers-grid").textContent.includes("Kun i Oslo"));
+  assert.ok(!$("offers-grid").textContent.includes("Ubekreftet butikk"));
   click('[data-view="profile"]');
   $("name-input").value = "Testkjøkken";
   $("name-form").dispatchEvent(
@@ -246,6 +288,10 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   assert.ok(!$("meal-plan").textContent.includes("Soyakylling"));
   click('[data-view="list"]');
   assert.ok(document.querySelectorAll(".shopping-item").length > 5);
+  assert.ok(
+    $("shopping-list").textContent.includes("Gjelder hos Meny Fredrikstad"),
+  );
+  assert.ok(!$("shopping-list").textContent.includes("Kun i Oslo"));
   const check = document.querySelector("[data-checked]");
   check.checked = true;
   change(check);
@@ -550,6 +596,7 @@ test("UI: reload resumes unfinished collection; an older partial result is reche
         expected: fixture.products.length + 3,
         received: fixture.products.length,
         done: true,
+        localityVerified: true,
         missing: 3,
       },
     ],

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { TEST_LOCALITY } from "./fixtures.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
@@ -22,6 +23,7 @@ const offer = (extra = {}) => ({
   mengde: "400 g",
   price: "40,-",
   store: "Meny",
+  locality: TEST_LOCALITY,
   store_label: "Meny Askim 🚗",
   store_key: "meny",
   merknad: "100,-/kilogram · spar 20,-",
