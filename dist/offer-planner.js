@@ -12,6 +12,20 @@ import {
 import { comparison, declaredOrganic } from "./offers.js";
 
 export const OFFER_TARGET = 80;
+// A pantry ingredient is excluded only when stock covers the entire week's
+// quantity. A small shared stock must not count as enough for every dinner.
+export function mealCoverage(recipes, items) {
+  const lines = new Map(items.map((i) => [i.id, i]));
+  return recipes.map((r) => ({
+    id: r.id,
+    title: r.title,
+    ...coverage(
+      [...new Set(r.ingredients.map(([id]) => id))]
+        .map((id) => lines.get(id))
+        .filter(Boolean),
+    ),
+  }));
+}
 const luxury = new Set([
   "scampi",
   "beefsteak",
@@ -348,6 +362,10 @@ export function planFromOffers(
     const cov = coverage(items),
       cost = items.reduce((n, i) => n + i.cost, 0);
     const selected = ids.map((id) => recipeMap.get(id));
+    const meals = mealCoverage(selected, items);
+    const lowestMealCoverage = meals.length
+      ? Math.min(...meals.map((m) => m.percent))
+      : 0;
     const variety = menuVariety(selected);
     const proteins = selected.map(proteinGroup);
     const repeatPenalty = proteins.reduce(
@@ -385,7 +403,8 @@ export function planFromOffers(
       items.filter((i) => i.offer && p.selected.includes(i.offer.id)).length *
         12;
     const score =
-      Math.min(OFFER_TARGET, cov.percent) * 100 +
+      Math.min(OFFER_TARGET, lowestMealCoverage) * 100 +
+      Math.min(OFFER_TARGET, cov.percent) * 50 +
       (p.preferVariety
         ? variety.proteins * 25 + variety.styles * 20 - repeatPenalty * 45
         : 0) +
@@ -403,6 +422,8 @@ export function planFromOffers(
       score,
       luxuryMeals,
       organic,
+      meals,
+      lowestMealCoverage,
     };
     cache.set(key, data);
     return data;
@@ -463,6 +484,7 @@ export function planFromOffers(
     (ids) =>
       ids.length === p.days &&
       measure(ids).coverage.percent >= OFFER_TARGET - 0.001 &&
+      measure(ids).lowestMealCoverage >= OFFER_TARGET - 0.001 &&
       (!p.budget || measure(ids).cost <= p.budget + 0.001),
   );
   const selected =
@@ -480,7 +502,10 @@ export function planFromOffers(
       cost: data.cost,
       metTarget:
         data.coverage.percent >= OFFER_TARGET - 0.001 &&
+        data.lowestMealCoverage >= OFFER_TARGET - 0.001 &&
         selected.length === p.days,
+      meals: data.meals,
+      lowestMealCoverage: data.lowestMealCoverage,
       withinBudget: !p.budget || data.cost <= p.budget + 0.001,
       generated: generated.length,
       recipesCreated: newRecipes.length,

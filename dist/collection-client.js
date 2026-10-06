@@ -2,6 +2,36 @@ import { localDate } from "./model.js";
 
 const STORAGE_KEY = "tilbudsplan:collection-job";
 const JOB_LIFETIME = 3600000;
+export function canUsePartialCollection(data) {
+  const c = data?.meta?.coverage;
+  return !!(
+    data?.status === "incomplete" &&
+    data.products?.length > 0 &&
+    c?.catalogsTotal > 0 &&
+    c.catalogsDone === c.catalogsTotal &&
+    c.catalogs?.length === c.catalogsTotal &&
+    c.catalogs.every((r) => r.done && !r.error)
+  );
+}
+export function isCompleteCollection(data) {
+  const c = data?.meta?.coverage;
+  return !!(
+    data?.status === "complete" &&
+    c?.complete === true &&
+    c.catalogsTotal > 0 &&
+    c.catalogsDone === c.catalogsTotal &&
+    c.catalogs?.length === c.catalogsTotal &&
+    c.catalogs.every(
+      (r) =>
+        r.done &&
+        !r.error &&
+        !r.unstructured &&
+        Number.isInteger(r.expected) &&
+        r.expected > 0 &&
+        r.received === r.expected,
+    )
+  );
+}
 function tabStorage() {
   try {
     return window.sessionStorage;

@@ -22,6 +22,7 @@ import {
   planFromOffers,
   keepGeneratedRecipes,
   createOfferRecipes,
+  mealCoverage,
 } from "../dist/offer-planner.js";
 
 // Synthetic prices exist only in tests. The production collector reads source prices.
@@ -84,6 +85,7 @@ test("new complete recipes turn a limited offer catalog into a varied, budgeted 
   assert.equal(new Set(result.plan).size, 7);
   assert.ok(result.report.generated >= 4);
   assert.equal(result.report.metTarget, true);
+  assert.ok(result.report.meals.every((m) => m.percent >= 80));
   assert.equal(result.report.withinBudget, true);
   assert.ok(result.report.luxuryMeals > 0);
   assert.ok(result.report.variety.styles >= 3);
@@ -112,6 +114,106 @@ test("new complete recipes turn a limited offer catalog into a varied, budgeted 
   assert.ok(
     doubled.every(
       (i) => i.quantity === items.find((x) => x.id === i.id).quantity * 2,
+    ),
+  );
+});
+
+test("weekly coverage cannot hide a dinner below 80 percent", () => {
+  const offered = [
+    "chicken",
+    "potato",
+    "carrot",
+    "pasta",
+    "rice",
+    "tomatoes",
+    "broccoli",
+    "soy",
+    "redonion",
+  ];
+  const p = {
+    ...emptyProfile(),
+    days: 2,
+    maxTime: 5,
+    customRecipes: [
+      {
+        id: "custom-11111111",
+        title: "Tilbudsmiddag",
+        time: 5,
+        tags: [],
+        ingredients: offered.map((id) => [id, 10]),
+        steps: ["Tilbered råvarene."],
+      },
+      {
+        id: "custom-22222222",
+        title: "Middag uten sitrontilbud",
+        time: 5,
+        tags: [],
+        ingredients: ["chicken", "potato", "carrot", "lemon"].map((id) => [
+          id,
+          10,
+        ]),
+        steps: ["Tilbered råvarene."],
+      },
+    ],
+  };
+  const result = planFromOffers(
+    p,
+    cleanOffers(offered.map((id) => offer(id))),
+    false,
+  );
+  assert.equal(result.report.achieved, 90);
+  assert.equal(result.report.lowestMealCoverage, 75);
+  assert.equal(result.report.metTarget, false);
+  assert.equal(
+    result.report.meals.find((m) => m.id === "custom-22222222").percent,
+    75,
+  );
+});
+
+test("meal coverage uses the actual week's store choice and does not reuse pantry stock", () => {
+  const p = {
+    ...emptyProfile(),
+    days: 2,
+    maxStores: 1,
+    pantry: { lemon: 100 },
+    plan: ["custom-11111111", "custom-22222222"],
+    customRecipes: [
+      {
+        id: "custom-11111111",
+        title: "Første",
+        time: 5,
+        tags: [],
+        ingredients: [
+          ["chicken", 100],
+          ["lemon", 100],
+        ],
+        steps: ["Tilbered."],
+      },
+      {
+        id: "custom-22222222",
+        title: "Andre",
+        time: 5,
+        tags: [],
+        ingredients: [
+          ["chicken", 100],
+          ["lemon", 100],
+        ],
+        steps: ["Tilbered."],
+      },
+    ],
+  };
+  const offers = cleanOffers([
+    offer("chicken"),
+    offer("lemon", { store: "Rema 1000" }),
+  ]);
+  const items = basket(p, offers, false);
+  const meals = mealCoverage(p.customRecipes, items);
+  assert.ok(items.filter((i) => i.offer).length === 1);
+  assert.ok(meals.every((m) => m.percent === 50));
+  const enough = { ...p, pantry: { lemon: 200 } };
+  assert.ok(
+    mealCoverage(p.customRecipes, basket(enough, offers, false)).every(
+      (m) => m.percent === 100,
     ),
   );
 });

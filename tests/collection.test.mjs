@@ -103,13 +103,35 @@ const raw = (id, extra = {}) => ({
   baseUnit: "kilogram",
   ...extra,
 });
-function sourceMock({ gap = false, repeat = false, fail = false } = {}) {
+function sourceMock({
+  gap = false,
+  repeat = false,
+  fail = false,
+  extraLegacy = false,
+} = {}) {
   const offsets = [];
   return {
     offsets,
     async fetch(url, init = {}) {
-      if (String(url).startsWith("https://squid-api.tjek.com/v2/offers"))
-        return Response.json([]);
+      if (String(url).startsWith("https://squid-api.tjek.com/v2/offers")) {
+        const query = new URL(url).searchParams;
+        return Response.json(
+          extraLegacy &&
+            query.get("catalog_id") === "catalog-b" &&
+            query.get("offset") === "0"
+            ? [
+                {
+                  id: "legacy-only",
+                  catalog_id: "catalog-b",
+                  dealer_id: "chain",
+                  heading: "Ukjent regionalt tilbud",
+                  description: "Pris i avisen",
+                  pricing: { price: 12, currency: "NOK" },
+                },
+              ]
+            : [],
+        );
+      }
       if (String(url).startsWith("https://squid-api.tjek.com/v2/catalogs")) {
         const offset = Number(new URL(url).searchParams.get("offset"));
         return Response.json(
@@ -284,6 +306,35 @@ test("full collection paginates past short pages, retains unmatched and regional
     assert.ok(
       damaged.meta.coverage.catalogs.some((c) => /Lagrede/.test(c.error || "")),
     );
+  } finally {
+    globalThis.fetch = original;
+    sql.close();
+  }
+});
+
+test("both source interfaces are exhausted even after the modern count is reached", async () => {
+  const original = globalThis.fetch;
+  const { env, sql } = storage();
+  globalThis.fetch = sourceMock({ extraLegacy: true }).fetch;
+  try {
+    const result = await collect(env, await startCollection(env, now));
+    assert.ok(result.products.some((o) => o.sourceId === "legacy-only"));
+    assert.equal(result.meta.coverage.offersFetched, 104);
+    assert.equal(result.meta.coverage.extra, 1);
+    assert.equal(result.status, "incomplete");
+    const old = sql.prepare("SELECT id,state FROM offer_runs").get();
+    const state = JSON.parse(old.state);
+    delete state.version;
+    sql
+      .prepare("UPDATE offer_runs SET state=? WHERE id=?")
+      .run(JSON.stringify(state), old.id);
+    const resumed = await startCollection(env, new Date(now.valueOf() + 60000));
+    assert.equal(
+      resumed.status,
+      "collecting",
+      "older collector output must be checked by both interfaces again",
+    );
+    assert.equal(resumed.coverage.cachedCatalogs, 0);
   } finally {
     globalThis.fetch = original;
     sql.close();

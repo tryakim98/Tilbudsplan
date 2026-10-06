@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createOfferCollector } from "../dist/collection-client.js";
+import {
+  createOfferCollector,
+  isCompleteCollection,
+  canUsePartialCollection,
+} from "../dist/collection-client.js";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const key = "a".repeat(48);
@@ -31,6 +35,38 @@ const options = (memory, fetchImpl) => ({
   fetchImpl,
   pause: async () => {},
   now: () => instant,
+});
+
+test("planning requires complete counts; partial use requires a finished run without source or storage errors", () => {
+  const data = {
+    ...result,
+    meta: {
+      coverage: {
+        ...coverage,
+        catalogs: [
+          { done: true, expected: 10, received: 10 },
+          { done: true, expected: 2, received: 2 },
+        ],
+      },
+    },
+  };
+  assert.equal(isCompleteCollection(data), true);
+  assert.equal(isCompleteCollection(null), false);
+  data.meta.coverage.catalogs[1].received = 1;
+  assert.equal(
+    isCompleteCollection(data),
+    false,
+    "do not trust a complete flag with mismatched counts",
+  );
+  data.status = "incomplete";
+  data.meta.coverage.complete = false;
+  assert.equal(canUsePartialCollection(data), true);
+  data.meta.coverage.catalogs[1].error = "Lagring feilet";
+  assert.equal(canUsePartialCollection(data), false);
+  data.meta.coverage.catalogs[1].error = null;
+  data.meta.coverage.catalogs[1].done = false;
+  assert.equal(canUsePartialCollection(data), false);
+  assert.equal(canUsePartialCollection(null), false);
 });
 
 test("lost step response retries the same job; a server lease never starts a second collection", async () => {

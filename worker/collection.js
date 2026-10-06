@@ -12,6 +12,7 @@ const SITE = "https://etilbudsavis.no/";
 const API = "https://squid-api.tjek.com/v2/";
 const LIMIT = 100;
 const BATCH = 4;
+const COLLECTION_VERSION = 2;
 const day = 86400000;
 const keyHash = async (key) =>
   [
@@ -154,6 +155,7 @@ export async function discoverCatalogs(now = new Date()) {
   if (!active.length)
     throw new Error("Ingen publiserte, gyldige tilbudsaviser finnes i kilden.");
   return {
+    version: COLLECTION_VERSION,
     chains,
     catalogs: active.map((c) => {
       const chain = chains.find((b) => b.sourceId === c.dealer_id);
@@ -164,7 +166,10 @@ export async function discoverCatalogs(now = new Date()) {
         label: chain.label,
         slug: chain.slug,
         title: c.label || "Tilbudsavis",
-        expected: c.offer_count ?? null,
+        expected:
+          Number.isInteger(c.offer_count) && c.offer_count >= 0
+            ? c.offer_count
+            : null,
         pages: c.page_count ?? null,
         validFrom: c.run_from,
         validUntil: c.run_till,
@@ -421,6 +426,7 @@ export function collectionCoverage(state) {
     done: c.done,
     error: c.error,
     missing: c.expected === null ? null : Math.max(0, c.expected - c.count),
+    extra: c.expected === null ? null : Math.max(0, c.count - c.expected),
     unstructured: c.done && c.count === 0,
     regional: c.regional,
   }));
@@ -430,16 +436,18 @@ export function collectionCoverage(state) {
       c.error ||
       c.unstructured ||
       c.expected === null ||
-      c.received < c.expected,
+      c.received !== c.expected,
   );
   return {
-    complete: done === catalogs.length && gaps.length === 0,
+    complete:
+      catalogs.length > 0 && done === catalogs.length && gaps.length === 0,
     surveyedChains: state.chains.length,
     chainsWithFlyers: new Set(state.catalogs.map((c) => c.chain)).size,
     catalogsTotal: catalogs.length,
     catalogsDone: done,
     offersFetched: catalogs.reduce((n, c) => n + c.received, 0),
     missing: catalogs.reduce((n, c) => n + (c.missing || 0), 0),
+    extra: catalogs.reduce((n, c) => n + (c.extra || 0), 0),
     gaps: gaps.length,
     cachedCatalogs: state.catalogs.filter((c) => c.cached).length,
     catalogs,
@@ -468,6 +476,7 @@ export async function startCollection(env, now = new Date(), force = false) {
         const c = state.catalogs[i],
           prior = previous.catalogs.find((p) => p.id === c.id);
         if (
+          previous.version !== COLLECTION_VERSION ||
           !prior?.done ||
           prior.error ||
           !prior.fetchedAt ||
@@ -572,10 +581,9 @@ export async function stepCollection(env, run, now = new Date()) {
             "Kilden returnerte flere varer enn forventet per side.",
           );
         if (!page.length) {
-          if (
-            c.phase === "modern" &&
-            !(c.expected > 0 && c.count >= c.expected)
-          ) {
+          // Both interfaces can contain unique offers, even when the first
+          // already reaches the advertised count. Always finish both.
+          if (c.phase === "modern") {
             c.phase = "legacy";
             c.offset = 0;
             c.signatures = [];

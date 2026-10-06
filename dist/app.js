@@ -25,12 +25,17 @@ import {
   validateProfile,
 } from "./model.js";
 import { chainInfo, comparison, isAdvertisedOffer } from "./offers.js";
-import { createOfferCollector } from "./collection-client.js";
+import {
+  createOfferCollector,
+  canUsePartialCollection,
+  isCompleteCollection,
+} from "./collection-client.js";
 import {
   OFFER_TARGET,
   planFromOffers,
   keepGeneratedRecipes,
   offerTraits,
+  mealCoverage,
 } from "./offer-planner.js";
 const offerCollector = createOfferCollector();
 const $ = (id) => document.getElementById(id);
@@ -285,9 +290,9 @@ async function generate({ allowPartial = false, replaceIndex } = {}) {
     if (!result.report.metTarget || !result.report.withinBudget) {
       $("planning-feedback").classList.add("over-budget");
       $("planning-feedback").textContent =
-        `Prøvde ${result.report.recipesCreated} nye tilbudsoppskrifter. Beste funne forslag har ${result.plan.length} av ${s.p.days} middager, ${amount(result.report.achieved)} % tilbudsvarer og handleanslag ${money(result.report.cost)}.` +
+        `Prøvde ${result.report.recipesCreated} nye tilbudsoppskrifter. Beste funne forslag har ${result.plan.length} av ${s.p.days} middager, ${amount(result.report.achieved)} % tilbudsvarer samlet, minst ${amount(result.report.lowestMealCoverage)} % per middag og handleanslag ${money(result.report.cost)}.` +
         (!result.report.metTarget
-          ? ` Målet på ${OFFER_TARGET} % er ikke nådd. ${result.report.missing.length ? "Uten tilbud: " + result.report.missing.join(", ") + "." : ""}`
+          ? ` Målet på ${OFFER_TARGET} % for hver middag og hele handlelisten er ikke nådd. ${result.report.missing.length ? "Uten tilbud: " + result.report.missing.join(", ") + "." : ""}`
           : "") +
         (!result.report.withinBudget
           ? ` Budsjettet på ${money(s.p.budget)} er ikke nådd.`
@@ -346,7 +351,7 @@ async function generate({ allowPartial = false, replaceIndex } = {}) {
     s.p.locked = [...positions].sort((a, b) => a - b);
   });
   $("planning-feedback").textContent =
-    `Uka er klar: ${amount(result.report.achieved)} % av handlevarene er fra tilbudsavisene. ${result.report.generated} retter er laget fra råvarene${result.report.luxuryMeals ? `, og ${result.report.luxuryMeals} middager bruker luksusråvarer med dokumentert rabatt eller historisk lav tilbudspris` : ""}. Handleanslag ${money(result.report.cost)}${s.p.budget ? " innenfor budsjettet" : ""}. Åpne ukas handleliste under.`;
+    `Uka er klar: ${amount(result.report.achieved)} % av handlevarene er på tilbud, og hver middag når minst ${OFFER_TARGET} %. ${result.report.generated} retter er laget fra råvarene${result.report.luxuryMeals ? `, og ${result.report.luxuryMeals} middager bruker luksusråvarer med dokumentert rabatt eller historisk lav tilbudspris` : ""}. Handleanslag ${money(result.report.cost)}${s.p.budget ? " innenfor budsjettet" : ""}. Åpne ukas handleliste under.`;
   view("plan");
   if (s.p.plan.length < s.p.days)
     toast(
@@ -388,6 +393,11 @@ function renderPlan() {
   const total = items.reduce((n, i) => n + i.cost, 0);
   const toBuy = items.filter((i) => i.need > 0);
   const covered = coverage(items);
+  const meals = mealCoverage(
+    s.p.plan.map((id) => catalog(s.p).find((r) => r.id === id)).filter(Boolean),
+    items,
+  );
+  const belowTarget = meals.filter((m) => m.percent < OFFER_TARGET - 0.001);
   const saving = advertisedBasketSaving(items);
   $("plan-data-basis").hidden = !s.p.plan.length || !s.p.planBasis;
   if (s.p.planBasis)
@@ -395,10 +405,10 @@ function renderPlan() {
       `${s.p.planBasis.complete ? "Kildens oppgitte antall tilbud ble kontrollert før planlegging." : "Tilbudsgrunnlaget har kildeavvik og er merket som ufullstendig. Se dekningsrapporten."} ${s.p.planBasis.offers} tilbud · ${s.p.planBasis.catalogs} aviser · hentet ${new Date(s.p.planBasis.generated).toLocaleString("nb-NO")}.${s.p.planBasis.newRecipes ? ` ${s.p.planBasis.newRecipes} nye retter ble bygget fra tilbudene.` : ""}${saving.lines ? ` ${money(saving.savings)} annonsert avslag på ${saving.lines} handlelinjer med sammenlignbar førpris; øvrige rabatter er ukjente.` : ""}`;
   $("coverage-status").hidden = !s.p.plan.length;
   $("coverage-status").textContent =
-    `${covered.offered} av ${covered.total} ulike varer som må kjøpes er fra tilbudsavisene (${amount(covered.percent)} %). ${covered.percent < OFFER_TARGET ? "Målet på 80 % er ikke nådd med den gjeldende planen. Hent tilbud og lag meny på nytt for nye oppskrifter." : "80 %-målet er nådd."} Andelen teller handlevarer, ikke kroner eller kilo. Varer merket som faste lavpriser teller ikke som tilbud. Rabatt er bare dokumentert der førpris eller sammenlignbar historikk finnes. Varer du har nok av hjemme teller ikke.`;
+    `${covered.offered} av ${covered.total} ulike varer som må kjøpes er på tilbud (${amount(covered.percent)} %). ${covered.percent < OFFER_TARGET || belowTarget.length ? `80 %-målet er ikke nådd${belowTarget.length ? " i " + belowTarget.length + " middager" : " for handlelisten"}. Hent tilbud og lag meny på nytt for nye oppskrifter.` : "80 %-målet er nådd for hver middag og hele handlelisten."} Andelen teller ulike varer, ikke kroner eller kilo. Faste lavpriser teller ikke som tilbud. Varer du har nok av hjemme for hele uka teller ikke.`;
   $("coverage-status").classList.toggle(
     "over-budget",
-    covered.percent < OFFER_TARGET,
+    covered.percent < OFFER_TARGET || belowTarget.length > 0,
   );
   $("plan-empty").hidden = !!s.p.plan.length;
   $("plan-summary").hidden = !s.p.plan.length;
@@ -429,7 +439,8 @@ function renderPlan() {
         (i) => i.offer && r.ingredients.some(([iid]) => iid === i.id),
       );
       const locked = s.p.locked.includes(index);
-      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy">${r.createdByOffers ? '<span class="recipe-origin">Ny oppskrift fra tilbudene</span>' : ""}<h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Disse prisene fra avisene er med i retten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="meal-deal"><div><strong>${html(i.offer.name)}</strong><small>${html(i.offer.store_label)} · ${html(i.offer.mengde || "")}</small></div><div><strong>${money(price(i.offer.price))}</strong>${comparison(i.offer).before ? `<small>Før <del>${money(comparison(i.offer).before)}</del> · ${amount(comparison(i.offer).discount)} %</small>` : "<small>Rabatt ikke dokumentert</small>"}${offerTraits(i.offer).organic ? "<small>Merket økologisk</small>" : ""}</div></div>`).join("")}<p class="small-note">Pakningspriser. Hele ukas innkjøp og rester er samlet i handlelisten. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked || s.planning ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
+      const meal = meals.find((m) => m.id === id);
+      return `<article class="meal-card${locked ? " is-locked" : ""}"><div class="meal-day"><span>Middag</span><strong>${index + 1}</strong></div><div class="meal-copy">${r.createdByOffers ? '<span class="recipe-origin">Ny oppskrift fra tilbudene</span>' : ""}<h3>${html(r.title)}</h3><p>${html(r.tip || "Din egen hverdagsfavoritt")}</p>${tags(r)}${recipeActions(r)}<p class="small-note${meal && meal.percent < OFFER_TARGET ? " error-text" : ""}">${meal ? `${meal.offered} av ${meal.total} handlevarer på tilbud · ${amount(meal.percent)} %` : ""}</p>${!eligible(r, s.p) ? '<p class="error-text">Passer ikke råvarevalgene eller tidsgrensen din. Bytt retten før du handler.</p>' : ""}</div><div class="meal-offers"><span>${matched.length ? "Disse prisene fra avisene er med i retten" : "Vanlige råvarer og det du har hjemme"}</span>${matched.map((i) => `<div class="meal-deal"><div><strong>${html(i.offer.name)}</strong><small>${html(i.offer.store_label)} · ${html(i.offer.mengde || "")}</small></div><div><strong>${money(price(i.offer.price))}</strong>${comparison(i.offer).before ? `<small>Før <del>${money(comparison(i.offer).before)}</del> · ${amount(comparison(i.offer).discount)} %</small>` : "<small>Rabatt ikke dokumentert</small>"}${offerTraits(i.offer).organic ? "<small>Merket økologisk</small>" : ""}</div></div>`).join("")}<p class="small-note">Pakningspriser. Hele ukas innkjøp og rester er samlet i handlelisten. Sjekk lokal gyldighet.</p><button class="secondary-button lock-meal" data-lock="${index}" aria-pressed="${locked}">${locked ? "Låst · lås opp" : "Behold denne middagen"}</button><button class="swap-meal" data-swap="${index}" ${locked || s.planning ? "disabled" : ""}>Bytt middag</button><button class="text-button" data-remove-meal="${index}">Ta ut</button></div></article>`;
     })
     .join("");
 }
@@ -851,10 +862,7 @@ function applyOfferData(data, fromCollection = false) {
       status: data.status,
       coverage: s.meta.coverage,
     };
-    s.pendingPartial =
-      data.status === "incomplete" &&
-      s.meta.coverage.catalogsDone === s.meta.coverage.catalogsTotal &&
-      data.products.length > 0;
+    s.pendingPartial = canUsePartialCollection(data);
     $("partial-plan").hidden = !s.pendingPartial;
     renderCollection(s.collection);
     if (!s.meta.coverage.complete)
@@ -878,18 +886,18 @@ function renderCollection(result) {
     ? `Henter alle tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
     : c.complete
       ? `Kontrollert: ${c.offersFetched} registrerte tilbud i ${c.catalogsTotal} aviser fra ${c.chainsWithFlyers} kjeder. ${c.surveyedChains} kjeder undersøkt.`
-      : `Henting ${ended ? "avsluttet" : "uferdig"}: ${c.catalogsDone} av ${c.catalogsTotal} avisvarianter gjennomgått · ${c.offersFetched} tilbud lest. Dekningen er ufullstendig: ${c.gaps} avisvarianter med avvik og antallsavvik på ${c.missing}.${errors ? ` ${errors} avisvarianter har hente- eller lagringsfeil.` : ""}`;
-  $("collection-next").hidden = running || !s.pendingPartial;
-  if (s.pendingPartial)
+      : `Henting ${ended ? "avsluttet" : "uferdig"}: ${c.catalogsDone} av ${c.catalogsTotal} avisvarianter gjennomgått · ${c.offersFetched} tilbud lest. Dekningen er ufullstendig: ${c.gaps} avisvarianter med avvik og antallsavvik på ${c.missing}${c.extra ? ` · ${c.extra} flere registrerte enn oppgitt` : ""}.${errors ? ` ${errors} avisvarianter har hente- eller lagringsfeil.` : ""}`;
+  $("collection-next").hidden = running || !ended || c.complete;
+  if (ended && !c.complete)
     $("collection-next").textContent = errors
-      ? "Noen tilbud kunne ikke hentes eller kontrolleres. Du kan hente alt på nytt, eller velge en ukeplan med de innsamlede tilbudene. Planen merkes med ufullstendig grunnlag."
-      : "Alle tilgjengelige tilbudssider er gjennomgått. Kildens oppgitte antall kan ikke bekreftes. Planen kan lages med de innsamlede tilbudene, men grunnlaget merkes som ufullstendig. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
+      ? "Noen tilbud kunne ikke hentes eller kontrolleres. Ingen ny ukeplan er laget. Hent og kontroller alle tilbud på nytt fra Tilbud-fanen."
+      : "Kildens oppgitte antall kan ikke bekreftes. Automatisk planlegging er stoppet, og den eksisterende planen er beholdt. Du kan uttrykkelig velge å bruke et ufullstendig grunnlag. 80 %-kravet og budsjettet gjelder fortsatt. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
   $("collection-panel").classList.toggle(
     "has-gaps",
     !c.complete && result.status !== "collecting",
   );
   $("collection-table").innerHTML =
-    `<table><thead><tr><th>Kjede / avis</th><th>Kildens antall</th><th>Hentet</th><th>Kontroll</th></tr></thead><tbody>${c.catalogs.map((r) => `<tr><td>${html(r.chain)} · ${html(r.title)}${r.regional ? "<small>Regional variant</small>" : ""}</td><td>${r.expected ?? "Ukjent"}</td><td>${r.received}</td><td>${html(r.error || (!r.done ? "Henter …" : r.unstructured ? "Ingen registrerte tilbud" : r.expected === null ? "Antallet kan ikke bekreftes" : r.missing ? r.missing + " mangler i kilden" : "Alle registrerte hentet"))}</td></tr>`).join("")}</tbody></table>`;
+    `<table><thead><tr><th>Kjede / avis</th><th>Kildens antall</th><th>Hentet</th><th>Kontroll</th></tr></thead><tbody>${c.catalogs.map((r) => `<tr><td>${html(r.chain)} · ${html(r.title)}${r.regional ? "<small>Regional variant</small>" : ""}</td><td>${r.expected ?? "Ukjent"}</td><td>${r.received}</td><td>${html(r.error || (!r.done ? "Henter …" : r.unstructured ? "Ingen registrerte tilbud" : r.expected === null ? "Antallet kan ikke bekreftes" : r.missing ? r.missing + " mangler i kilden" : r.extra ? r.extra + " flere enn kildens antall" : "Alle registrerte hentet"))}</td></tr>`).join("")}</tbody></table>`;
   if (c.cachedCatalogs)
     $("collection-status").textContent +=
       ` ${c.cachedCatalogs} aviser gjenbruker tilbud hentet siste 15 minutter. Avisregisteret er kontrollert på nytt, og avvikene er beholdt. Oppdateringsknappen henter alt på nytt.`;
@@ -945,14 +953,14 @@ async function collectAllOffers(force = false) {
     s.source = "Direkte fra eTilbudsavis";
     s.offerPage = 0;
     applyOfferData(data, true);
-    if (!data.meta.coverage.complete) {
+    if (!isCompleteCollection(data)) {
       const errors = data.meta.coverage.catalogs.some((c) => c.error);
       toast(
         errors
-          ? "Hentingen er avsluttet med feil. Du kan velge å bruke de innsamlede tilbudene."
-          : "Alle tilgjengelige sider er hentet. Antallsavvik fra kilden vises i planen.",
+          ? "Hentingen har kilde- eller lagringsfeil. Ingen ny ukeplan er laget."
+          : "Dekningen er ufullstendig. Ingen ny ukeplan er laget; se dekningsrapporten.",
       );
-      return !errors && data.products.length > 0;
+      return false;
     }
     return true;
   } catch (error) {

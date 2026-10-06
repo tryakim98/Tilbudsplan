@@ -456,7 +456,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   click("#refresh-data");
   await wait(100);
   assert.equal(forcedCollection, true);
-  // All pages must finish before planning. Metadata gaps are disclosed and do not strand the user.
+  // Incomplete source coverage stops automatic planning; using it requires a separate explicit action.
   const prior = $("meal-plan").innerHTML;
   let finish;
   releaseCollection = new Promise((resolve) => {
@@ -472,9 +472,17 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   finish();
   releaseCollection = null;
   await wait(100);
-  assert.equal($("partial-plan").hidden, true);
+  assert.equal($("partial-plan").hidden, false);
   assert.ok($("collection-status").textContent.includes("ufullstendig"));
   await wait(500);
+  assert.equal(
+    $("meal-plan").innerHTML,
+    prior,
+    "incomplete counts cannot replace the existing week",
+  );
+  click("#partial-plan");
+  await wait(500);
+  assert.equal($("partial-plan").hidden, true);
   assert.ok($("plan-data-basis").textContent.includes("ufullstendig"));
   const partialPlan = $("meal-plan").innerHTML;
   sourceStatus = "error";
@@ -492,8 +500,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   assert.equal($("resume-collection").hidden, true);
   assert.equal($("partial-plan").hidden, false);
   assert.ok(
-    $("collection-next").textContent.includes("kildens oppgitte antall") ||
-      $("collection-next").textContent.includes("Kildens oppgitte antall"),
+    $("collection-next").textContent.includes("Kildens oppgitte antall"),
   );
   assert.equal(sessionStorage.getItem("tilbudsplan:collection-job"), null);
   await window.happyDOM.close();
@@ -615,6 +622,7 @@ test("UI: reload resumes unfinished collection; an older partial result is reche
   assert.equal(starts, 1, "older data must trigger a fresh coverage check");
   assert.equal(steps, 2);
   assert.equal(document.querySelectorAll(".meal-card").length, 7);
+  assert.equal(document.getElementById("partial-plan").hidden, true);
   assert.ok(
     document
       .getElementById("plan-data-basis")
