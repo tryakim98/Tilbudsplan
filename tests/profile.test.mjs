@@ -87,6 +87,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
     "location",
     "history",
     "localStorage",
+    "sessionStorage",
     "navigator",
   ])
     Object.defineProperty(globalThis, key, {
@@ -138,8 +139,8 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
         forcedCollection = String(url).includes("fresh=1");
         collectionStarts++;
         return Response.json({
-          id: "test-run",
-          key: "test-job-key",
+          id: "11111111-1111-4111-8111-111111111111",
+          key: "a".repeat(48),
           status: "collecting",
           coverage: { ...coverage, catalogsDone: 0 },
         });
@@ -149,14 +150,14 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
         if (sourceStatus === "error")
           return Response.json({ error: "Kilden feilet" }, { status: 503 });
         return Response.json({
-          id: "test-run",
+          id: "11111111-1111-4111-8111-111111111111",
           status: sourceStatus,
           coverage,
         });
       }
       return Response.json({
         ...offersFixture,
-        id: "test-run",
+        id: "11111111-1111-4111-8111-111111111111",
         status: sourceStatus,
         meta: {
           ...offersFixture.meta,
@@ -422,9 +423,148 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   const partialPlan = $("meal-plan").innerHTML;
   sourceStatus = "error";
   click("#generate-plan");
-  await wait(100);
+  await wait(3200);
   assert.equal($("meal-plan").innerHTML, partialPlan);
   assert.equal($("partial-plan").hidden, true);
   assert.ok($("collection-status").textContent.includes("ingen ny plan"));
+  assert.equal($("resume-collection").hidden, false);
+  const interruptedStarts = collectionStarts;
+  sourceStatus = "incomplete";
+  click("#resume-collection");
+  await wait(100);
+  assert.equal(collectionStarts, interruptedStarts);
+  assert.equal($("resume-collection").hidden, true);
+  assert.equal($("partial-plan").hidden, false);
+  assert.ok(
+    $("collection-next").textContent.includes("kildens oppgitte antall") ||
+      $("collection-next").textContent.includes("Kildens oppgitte antall"),
+  );
+  assert.equal(sessionStorage.getItem("tilbudsplan:collection-job"), null);
+  await window.happyDOM.close();
+});
+
+test("UI: reload resumes unfinished collection; an older partial result is rechecked before planning", async () => {
+  const window = new Window({ url: "https://test.local/" });
+  window.document.write(
+    readFileSync(
+      new URL("../dist/index.html", import.meta.url),
+      "utf8",
+    ).replace(/<script[^>]*>.*?<\/script>/gs, ""),
+  );
+  for (const name of [
+    "window",
+    "document",
+    "location",
+    "history",
+    "localStorage",
+    "sessionStorage",
+    "navigator",
+  ])
+    Object.defineProperty(globalThis, name, {
+      value: name === "window" ? window : window[name],
+      configurable: true,
+    });
+  const fixture = JSON.parse(
+    readFileSync(new URL("../dist/latest-data.json", import.meta.url), "utf8"),
+  );
+  const id = "22222222-2222-4222-8222-222222222222";
+  const key = "b".repeat(48);
+  sessionStorage.setItem(
+    "tilbudsplan:collection-job",
+    JSON.stringify({ id, key, started: Date.now() - 600000 }),
+  );
+  const coverage = {
+    complete: false,
+    surveyedChains: 2,
+    chainsWithFlyers: 1,
+    catalogsTotal: 1,
+    catalogsDone: 1,
+    offersFetched: fixture.products.length,
+    missing: 3,
+    gaps: 1,
+    catalogs: [
+      {
+        chain: "Meny",
+        title: "Testavis",
+        expected: fixture.products.length + 3,
+        received: fixture.products.length,
+        done: true,
+        missing: 3,
+      },
+    ],
+  };
+  let starts = 0,
+    steps = 0,
+    reads = 0,
+    release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const finished = () => ({
+    ...fixture,
+    id,
+    status: "incomplete",
+    meta: {
+      ...fixture.meta,
+      coverage,
+      generated: new Date(Date.now() - (starts ? 0 : 600000)).toISOString(),
+      collectionCompleted: new Date(
+        Date.now() - (starts ? 0 : 600000),
+      ).toISOString(),
+    },
+  });
+  globalThis.fetch = async (path, init = {}) => {
+    if (path === "/api/offers") return Response.json(finished());
+    if (path === "/api/collection") {
+      starts++;
+      return Response.json({
+        id,
+        key,
+        status: "collecting",
+        coverage: { ...coverage, catalogsDone: 0 },
+      });
+    }
+    assert.equal(init.headers.authorization, "Bearer " + key);
+    if (path.endsWith("/step")) {
+      steps++;
+      if (steps === 1) await gate;
+      return Response.json({ id, status: "incomplete", coverage });
+    }
+    reads++;
+    return Response.json(
+      reads === 1
+        ? {
+            id,
+            status: "collecting",
+            coverage: { ...coverage, catalogsDone: 0 },
+          }
+        : finished(),
+    );
+  };
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  await import("../dist/app.js?reload-flow");
+  await wait(50);
+  assert.equal(starts, 0);
+  assert.equal(steps, 1);
+  assert.equal(document.getElementById("generate-plan").disabled, true);
+  assert.equal(document.getElementById("partial-plan").hidden, true);
+  assert.equal(document.getElementById("collection-activity").hidden, false);
+  assert.equal(document.querySelectorAll(".meal-card").length, 0);
+  release();
+  await wait(80);
+  assert.equal(document.getElementById("generate-plan").disabled, false);
+  assert.equal(document.getElementById("collection-activity").hidden, true);
+  assert.equal(document.getElementById("partial-plan").hidden, false);
+  assert.equal(sessionStorage.getItem("tilbudsplan:collection-job"), null);
+  document.getElementById("partial-plan").click();
+  await wait(100);
+  assert.equal(starts, 1, "older data must trigger a fresh coverage check");
+  assert.equal(steps, 2);
+  assert.equal(document.querySelectorAll(".meal-card").length, 5);
+  assert.ok(
+    document
+      .getElementById("plan-data-basis")
+      .textContent.includes("ufullstendig"),
+  );
   await window.happyDOM.close();
 });

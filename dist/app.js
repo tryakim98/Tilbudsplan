@@ -27,6 +27,8 @@ import {
   validateProfile,
 } from "./model.js";
 import { chainInfo, comparison } from "./offers.js";
+import { createOfferCollector } from "./collection-client.js";
+const offerCollector = createOfferCollector();
 const $ = (id) => document.getElementById(id);
 const html = (s = "") =>
   String(s).replace(
@@ -241,16 +243,23 @@ async function generate({ allowPartial = false } = {}) {
   }
   if (s.collecting) return;
   if (allowPartial) {
-    if (
-      !s.pendingPartial ||
-      s.collection?.status !== "incomplete" ||
-      Date.now() - new Date(s.meta.collectionCompleted || s.meta.generated) >
-        300000
-    )
+    if (!s.pendingPartial || s.collection?.status !== "incomplete") {
+      toast("Hentingen må avsluttes før du kan bruke tilbudene i en plan.");
       return;
+    }
+    const completed = new Date(s.meta.collectionCompleted || s.meta.generated);
+    if (
+      !Number.isFinite(completed.valueOf()) ||
+      Date.now() - completed > 300000
+    ) {
+      toast("Kontrollerer tilbudene på nytt før ukeplanen lages …");
+      const complete = await collectAllOffers();
+      if (!complete && !s.pendingPartial) return;
+    }
   } else if (!(await collectAllOffers())) return;
   s.pendingPartial = false;
   $("partial-plan").hidden = true;
+  $("collection-next").hidden = true;
   const locked = s.p.locked.map((i) => ({ id: s.p.plan[i], index: i }));
   mutatePlan(() => {
     s.p.plan = makePlan(s.p, s.offers, s.stale, ++s.variation);
@@ -684,7 +693,8 @@ async function loadData() {
   }
   applyOfferData(data);
 }
-function applyOfferData(data) {
+function applyOfferData(data, fromCollection = false) {
+  if (s.collecting && !fromCollection) return;
   const before = basket(s.p, s.offers, s.stale);
   s.meta = data.meta || {};
   if (!s.meta.chains)
@@ -724,6 +734,11 @@ function applyOfferData(data) {
       status: data.status,
       coverage: s.meta.coverage,
     };
+    s.pendingPartial =
+      data.status === "incomplete" &&
+      s.meta.coverage.catalogsDone === s.meta.coverage.catalogsTotal &&
+      data.products.length > 0;
+    $("partial-plan").hidden = !s.pendingPartial;
     renderCollection(s.collection);
     if (!s.meta.coverage.complete)
       $("data-warning").textContent +=
@@ -739,12 +754,19 @@ function renderCollection(result) {
   if (!c) return;
   $("collection-progress").max = c.catalogsTotal || 1;
   $("collection-progress").value = c.catalogsDone;
-  $("collection-status").textContent =
-    result.status === "collecting" || result.status === "busy"
-      ? `Henter alle tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
-      : c.complete
-        ? `Kontrollert: ${c.offersFetched} registrerte tilbud i ${c.catalogsTotal} aviser fra ${c.chainsWithFlyers} kjeder. ${c.surveyedChains} kjeder undersøkt.`
-        : `Hentingen er avsluttet, men dekningen er ufullstendig: ${c.offersFetched} tilbud lest · ${c.gaps} avisvarianter med avvik · antallsavvik på ${c.missing} i avisvariantene. Ingen ny plan er laget automatisk.`;
+  const running = result.status === "collecting" || result.status === "busy";
+  const ended = c.catalogsDone === c.catalogsTotal;
+  const errors = c.catalogs.filter((r) => r.error).length;
+  $("collection-status").textContent = running
+    ? `Henter alle tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
+    : c.complete
+      ? `Kontrollert: ${c.offersFetched} registrerte tilbud i ${c.catalogsTotal} aviser fra ${c.chainsWithFlyers} kjeder. ${c.surveyedChains} kjeder undersøkt.`
+      : `Henting ${ended ? "avsluttet" : "uferdig"}: ${c.catalogsDone} av ${c.catalogsTotal} avisvarianter gjennomgått · ${c.offersFetched} tilbud lest. Dekningen er ufullstendig: ${c.gaps} avisvarianter med avvik og antallsavvik på ${c.missing}.${errors ? ` ${errors} avisvarianter har hente- eller lagringsfeil.` : ""}`;
+  $("collection-next").hidden = running || !s.pendingPartial;
+  if (s.pendingPartial)
+    $("collection-next").textContent = errors
+      ? "Noen tilbud kunne ikke hentes eller kontrolleres. Du kan hente alt på nytt, eller velge en ukeplan med de innsamlede tilbudene. Planen merkes med ufullstendig grunnlag."
+      : "Alle tilgjengelige tilbudssider er gjennomgått. Kildens oppgitte antall kan ikke bekreftes. Velg knappen under for å lage ukeplanen likevel; den merkes med ufullstendig grunnlag. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
   $("collection-panel").classList.toggle(
     "has-gaps",
     !c.complete && result.status !== "collecting",
@@ -760,11 +782,28 @@ async function collectAllOffers(force = false) {
   s.collecting = true;
   s.pendingPartial = false;
   $("partial-plan").hidden = true;
+  $("resume-collection").hidden = true;
+  $("collection-next").hidden = true;
   $("collection-panel").hidden = false;
   $("collection-panel").classList.remove("has-gaps");
-  $("collection-status").textContent =
-    "Leser hele kjede- og avisregisteret før planlegging …";
+  const resuming = !force && offerCollector.pending;
+  $("collection-status").textContent = resuming
+    ? "Fortsetter den avbrutte tilbudshentingen fra sist lagrede side …"
+    : "Leser hele kjede- og avisregisteret før planlegging …";
   $("collection-progress").removeAttribute("value");
+  const started = Date.now();
+  let lastResponse = started;
+  const activity = () => {
+    const seconds = Math.floor((Date.now() - started) / 1000);
+    const silent = Math.floor((Date.now() - lastResponse) / 1000);
+    $("collection-activity").hidden = false;
+    $("collection-activity").textContent =
+      `Tid brukt: ${Math.floor(seconds / 60)} min ${seconds % 60} sek. ` +
+      (silent >= 15 ? `Venter på neste serversvar (${silent} sek). ` : "") +
+      "Første gjennomgang kan ta flere minutter. Hold siden åpen. Hvis siden lastes på nytt, kan hentingen fortsette i denne fanen.";
+  };
+  activity();
+  const heartbeat = setInterval(activity, 1000);
   const controls = [
     "quick-plan",
     "generate-plan",
@@ -774,63 +813,25 @@ async function collectAllOffers(force = false) {
     "refresh-data",
   ];
   controls.forEach((id) => ($(id).disabled = true));
-  const call = async (url, method, key) => {
-    const response = await fetch(url, {
-      method,
-      headers: {
-        "content-type": "application/json",
-        ...(key ? { authorization: "Bearer " + key } : {}),
-      },
-      cache: "no-store",
-      referrerPolicy: "no-referrer",
-      signal: AbortSignal.timeout(60000),
-    });
-    const data = await response.json();
-    if (!response.ok || data.error)
-      throw new Error(data.error || "Tilbudshentingen feilet.");
-    return data;
-  };
   try {
-    const start = await call(
-      "/api/collection" + (force ? "?fresh=1" : ""),
-      "POST",
-    );
-    if (!start.id || !start.key || !start.coverage)
-      throw new Error("Innsamlingen kunne ikke startes. Planen er beholdt.");
-    let result = start;
-    renderCollection(result);
-    for (
-      let i = 0;
-      result.status === "collecting" || result.status === "busy";
-      i++
-    ) {
-      if (i >= 2000)
-        throw new Error("Innsamlingen har ikke fullført. Planen er beholdt.");
-      if (result.status === "busy")
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      result = await call(
-        "/api/collection/" + start.id + "/step",
-        "POST",
-        start.key,
-      );
-      if (result.coverage) renderCollection(result);
-    }
-    const data = await call("/api/collection/" + start.id, "GET", start.key);
-    if (
-      !Array.isArray(data.products) ||
-      !data.meta?.coverage ||
-      !["complete", "incomplete"].includes(data.status)
-    )
-      throw new Error(
-        "Innsamlingen er ikke bekreftet fullført. Planen er beholdt.",
-      );
+    const data = await offerCollector.collect({
+      force,
+      onProgress(result) {
+        lastResponse = Date.now();
+        renderCollection(result);
+      },
+      onRetry(attempt) {
+        $("collection-status").textContent =
+          `Forbindelsen ble avbrutt. Prøver samme hentesteg igjen (${attempt}/2). Tilbudene som er lagret, beholdes.`;
+      },
+    });
     s.source = "Direkte fra eTilbudsavis";
     s.offerPage = 0;
-    applyOfferData(data);
+    applyOfferData(data, true);
     if (!data.meta.coverage.complete) {
-      s.pendingPartial = true;
-      $("partial-plan").hidden = !data.products.length;
-      toast("Noen aviser har avvik. Kontroller dekningen; planen er beholdt.");
+      toast(
+        "Hentingen er ferdig. Velg om du vil lage ukeplan med innsamlede tilbud.",
+      );
       return false;
     }
     return true;
@@ -839,10 +840,16 @@ async function collectAllOffers(force = false) {
     $("collection-status").textContent =
       error.message +
       " Full dekning er ikke bekreftet, og ingen ny plan er laget.";
-    $("collection-progress").value = 0;
-    toast("Tilbudshentingen feilet. Prøv å hente alle tilbud igjen.");
+    $("resume-collection").hidden = !offerCollector.pending;
+    $("collection-next").hidden = false;
+    $("collection-next").textContent = offerCollector.pending
+      ? "Tilbud som allerede er hentet, er lagret. Trykk «Fortsett henting» for å prøve igjen fra samme sted. Ukeplanen din er beholdt."
+      : "Trykk «Hent og kontroller alle tilbud» i Tilbud for å prøve igjen. Ukeplanen din er beholdt.";
+    toast("Tilbudshentingen ble avbrutt. Se meldingen over ukeplanen.");
     return false;
   } finally {
+    clearInterval(heartbeat);
+    $("collection-activity").hidden = true;
     s.collecting = false;
     controls.forEach((id) => ($(id).disabled = false));
   }
@@ -1083,6 +1090,9 @@ $("offers-next").addEventListener("click", () => {
 $("partial-plan").addEventListener("click", () =>
   generate({ allowPartial: true }),
 );
+$("resume-collection").addEventListener("click", async () => {
+  await collectAllOffers();
+});
 for (const id of [
   "recipe-search",
   "recipe-category",
@@ -1245,6 +1255,7 @@ function setupNewFeatures() {
     s.p.maxStores = 0;
     s.p.stores = [];
     syncControls();
+    changed();
     generate();
   });
   $("plan-mode").addEventListener("change", () => {
@@ -1450,5 +1461,6 @@ async function init(keyOverride) {
   render();
   if (params.get("oppskrift")) openRecipe(params.get("oppskrift"));
   await loadData();
+  if (offerCollector.pending) await collectAllOffers();
 }
 init();

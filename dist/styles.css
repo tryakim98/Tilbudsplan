@@ -51,6 +51,11 @@
 .collection-panel details {
   margin: 12px 0;
 }
+.collection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .coverage-table-wrap {
   overflow: auto;
   max-height: 350px;

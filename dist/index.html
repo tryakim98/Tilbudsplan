@@ -75,6 +75,7 @@
           value="0"
           aria-label="Tilbudsaviser kontrollert"
         ></progress>
+        <p id="collection-activity" class="small-note" hidden></p>
         <p class="small-note">
           Henter alle registrerte tilbud i alle publiserte avisvarianter fra
           norske dagligvarekjeder i eTilbudsavis. Trykte tilbud som mangler i
@@ -84,9 +85,15 @@
           <summary>Se dekning per tilbudsavis</summary>
           <div class="coverage-table-wrap" id="collection-table"></div>
         </details>
-        <button id="partial-plan" class="secondary-button" hidden>
-          Lag plan med ufullstendig grunnlag
-        </button>
+        <p id="collection-next" class="small-note" hidden></p>
+        <div class="collection-actions">
+          <button id="resume-collection" class="secondary-button" hidden>
+            Fortsett henting
+          </button>
+          <button id="partial-plan" class="primary-button" hidden>
+            Lag ukeplan med innsamlede tilbud
+          </button>
+        </div>
       </section>
       <nav class="flow-tabs" aria-label="Hovedmeny">
         <button class="flow-tab is-active" data-view="plan" aria-current="page">
