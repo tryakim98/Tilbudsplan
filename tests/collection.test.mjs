@@ -4,6 +4,7 @@ import { TEST_LOCALITY } from "./fixtures.mjs";
 import {
   canUsePartialCollection,
   isCompleteCollection,
+  canPlanWithCollection,
 } from "../dist/collection-client.js";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
@@ -76,8 +77,8 @@ const cat = {
   offer_count: 102,
   page_count: 10,
   all_stores: false,
-  run_from: "2026-10-05T00:00:00Z",
-  run_till: "2026-10-11T23:59:59Z",
+  run_from: "2020-01-01T00:00:00Z",
+  run_till: "2099-01-01T23:59:59Z",
 };
 const catalog = {
   id: "catalog-a",
@@ -89,8 +90,8 @@ const catalog = {
   regional: true,
   localStores: TEST_LOCALITY.stores,
   localityVerified: true,
-  validFrom: cat.run_from,
-  validUntil: cat.run_till,
+  validFrom: "2020-01-01",
+  validUntil: "2099-01-01",
 };
 const raw = (id, extra = {}) => ({
   publicId: String(id),
@@ -120,13 +121,44 @@ function sourceMock({
   emptyStoresB = false,
   lateLocalB = false,
   repeatedStores = false,
+  nationwide = false,
+  clutter = false,
 } = {}) {
   const offsets = [];
   const storeOffsets = [];
+  const directoryQueries = [],
+    catalogQueries = [];
   return {
     offsets,
     storeOffsets,
+    directoryQueries,
+    catalogQueries,
     async fetch(url, init = {}) {
+      if (String(url).startsWith("https://squid-api.tjek.com/v2/stores?")) {
+        directoryQueries.push(new URL(url));
+        return Response.json([
+          {
+            id: "local-directory",
+            dealer_id: "chain",
+            city: "Fredrikstad",
+            name: "Meny Fredrikstad",
+            country: { id: "NO" },
+          },
+          {
+            id: "",
+            dealer_id: "chain",
+            city: "Fredrikstad",
+            country: { id: "NO" },
+          },
+          {
+            id: "oslo-directory",
+            dealer_id: "chain",
+            city: "Oslo",
+            name: "Meny Oslo",
+            country: { id: "NO" },
+          },
+        ]);
+      }
       if (/\/catalogs\/[^/]+\/stores\?/.test(String(url))) {
         const parsed = new URL(url),
           id = parsed.pathname.split("/").at(-2),
@@ -151,7 +183,7 @@ function sourceMock({
           emptyStoresB && id === "catalog-b"
             ? []
             : repeatedStores
-              ? [local]
+              ? [remote]
               : lateLocalB && id === "catalog-b"
                 ? offset === 0
                   ? [remote]
@@ -183,10 +215,36 @@ function sourceMock({
         );
       }
       if (String(url).startsWith("https://squid-api.tjek.com/v2/catalogs")) {
-        const offset = Number(new URL(url).searchParams.get("offset"));
+        const query = new URL(url);
+        catalogQueries.push(query);
+        assert.equal(
+          query.searchParams.get("store_ids"),
+          "local-directory",
+          "flyers must be selected by the verified local shop IDs before scanning",
+        );
+        const offset = Number(query.searchParams.get("offset"));
         return Response.json(
           offset === 0
-            ? [cat, { ...cat, id: "catalog-b", offer_count: 1 }]
+            ? [
+                { ...cat, all_stores: nationwide },
+                ...(outsideB
+                  ? []
+                  : [
+                      {
+                        ...cat,
+                        id: "catalog-b",
+                        offer_count: 1,
+                        all_stores: nationwide,
+                      },
+                    ]),
+                ...(clutter
+                  ? [
+                      { ...cat, id: "building", label: "Bygg i Obs" },
+                      { ...cat, id: "empty", offer_count: 0 },
+                      { ...cat, id: "future", run_from: "2030-01-01" },
+                    ]
+                  : []),
+              ]
             : [],
         );
       }
@@ -356,13 +414,22 @@ test("full collection paginates past short pages, retains unmatched and regional
     assert.ok(
       damaged.meta.coverage.catalogs.some((c) => /Lagrede/.test(c.error || "")),
     );
+    assert.ok(
+      damaged.products.every((o) => o.publicationId !== cat.id),
+      "damaged saved flyer data must not contribute prices",
+    );
+    assert.equal(
+      canPlanWithCollection(damaged),
+      true,
+      "other intact verified flyers remain usable",
+    );
   } finally {
     globalThis.fetch = original;
     sql.close();
   }
 });
 
-test("only the exact local flyer is fetched when the same chain has an out-of-town variant", async () => {
+test("out-of-town flyers are filtered by local store IDs before any flyer or store-page inspection", async () => {
   const original = globalThis.fetch,
     mock = sourceMock({ outsideB: true });
   const { env, sql } = storage();
@@ -370,8 +437,8 @@ test("only the exact local flyer is fetched when the same chain has an out-of-to
   try {
     const result = await collect(env, await startCollection(env, now));
     assert.equal(result.status, "complete");
-    assert.equal(result.meta.coverage.catalogsSurveyed, 2);
-    assert.equal(result.meta.coverage.catalogsExcluded, 1);
+    assert.equal(result.meta.coverage.catalogsSurveyed, 1);
+    assert.equal(result.meta.coverage.catalogsExcluded, 0);
     assert.equal(result.meta.coverage.catalogsTotal, 1);
     assert.equal(result.products.length, 102);
     assert.ok(
@@ -394,14 +461,68 @@ test("only the exact local flyer is fetched when the same chain has an out-of-to
     );
     const cached = await startCollection(env, new Date(now.valueOf() + 60000));
     assert.equal(cached.status, "complete");
-    assert.equal(cached.coverage.catalogsExcluded, 1);
+    assert.equal(cached.coverage.catalogsExcluded, 0);
+    assert.equal(
+      mock.storeOffsets.some((p) => p.id === "catalog-b"),
+      false,
+      "out-of-town flyer store pages must never be requested",
+    );
   } finally {
     globalThis.fetch = original;
     sql.close();
   }
 });
 
-test("local shop membership is paginated to empty even after a short remote-only page", async () => {
+test("bounded local discovery skips unrelated, future and empty flyers and reuses the daily shop directory", async () => {
+  const original = globalThis.fetch,
+    mock = sourceMock({ nationwide: true, clutter: true });
+  const { env, sql } = storage();
+  globalThis.fetch = mock.fetch;
+  try {
+    const result = await collect(env, await startCollection(env, now));
+    assert.equal(mock.directoryQueries.length, 3);
+    assert.ok(
+      mock.directoryQueries.every(
+        (q) =>
+          q.searchParams.get("limit") === "100" && q.searchParams.has("r_lat"),
+      ),
+    );
+    assert.equal(result.meta.coverage.localStoresSurveyed, 1);
+    assert.equal(result.meta.coverage.localChainsSurveyed, 1);
+    assert.equal(result.meta.coverage.skippedCatalogs, 3);
+    assert.equal(result.meta.coverage.catalogsTotal, 2);
+    assert.equal(
+      mock.storeOffsets.length,
+      0,
+      "nationwide flyers selected by local stores need no nationwide store enumeration",
+    );
+    assert.ok(
+      mock.offsets.every((o) => ["catalog-a", "catalog-b"].includes(o.id)),
+    );
+    assert.ok(
+      result.products.every((o) =>
+        o.locality.stores.every((s) => s.city === "Fredrikstad"),
+      ),
+    );
+    await startCollection(env, new Date(now.valueOf() + 20 * 60000));
+    assert.equal(
+      mock.directoryQueries.length,
+      3,
+      "local shop addresses need not be fetched on every generation",
+    );
+    await startCollection(env, new Date(now.valueOf() + 21 * 60000), true);
+    assert.equal(
+      mock.directoryQueries.length,
+      6,
+      "an explicit fresh collection refreshes the nearby shop directory too",
+    );
+  } finally {
+    globalThis.fetch = original;
+    sql.close();
+  }
+});
+
+test("regional shop search stops as soon as a local branch is positively verified, including after a short remote-only page", async () => {
   const original = globalThis.fetch,
     mock = sourceMock({ lateLocalB: true });
   const { env, sql } = storage();
@@ -414,7 +535,7 @@ test("local shop membership is paginated to empty even after a short remote-only
       mock.storeOffsets
         .filter((p) => p.id === "catalog-b")
         .map((p) => p.offset),
-      [0, 100, 200],
+      [0, 100],
     );
     assert.equal(
       result.products.find((o) => o.publicationId === "catalog-b").locality
@@ -478,9 +599,13 @@ test("failed or repeated shop associations do not masquerade as verified local c
       try {
         const result = await collect(env, await startCollection(env, now));
         assert.equal(result.status, "incomplete");
-        assert.equal(result.meta.localityVerified, false);
+        assert.equal(result.meta.localityVerified, true);
         assert.equal(isCompleteCollection(result), false);
-        assert.equal(canUsePartialCollection(result), false);
+        assert.equal(
+          canPlanWithCollection(result),
+          !!result.products.length,
+          "a failed other flyer must not block the healthy verified local subset",
+        );
         assert.ok(
           result.meta.coverage.catalogs.some((c) =>
             /Lokal gyldighet/.test(c.error || ""),

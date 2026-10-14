@@ -3,24 +3,33 @@ import { isLocalOffer } from "./locality.js";
 
 const STORAGE_KEY = "tilbudsplan:collection-job";
 const JOB_LIFETIME = 3600000;
-export function canUsePartialCollection(data) {
+export function canPlanWithCollection(data) {
   const c = data?.meta?.coverage;
   return !!(
-    data?.status === "incomplete" &&
+    ["complete", "incomplete"].includes(data?.status) &&
     data.meta?.localityVerified === true &&
     data.products?.length > 0 &&
     data.products.every(isLocalOffer) &&
     c?.catalogsTotal > 0 &&
     c.catalogsDone === c.catalogsTotal &&
     c.catalogs?.length === c.catalogsTotal &&
-    c.catalogs.every(
-      (r) =>
-        r.done &&
-        !r.error &&
-        (r.localityVerified === true ||
-          (r.unlocated === true && r.received === 0)),
+    c.catalogs.every((r) => r.done) &&
+    !data.products.some((o) =>
+      c.catalogs.some((r) => r.id === o.publicationId && r.storageError),
     )
   );
+}
+export function collectionIsFresh(meta, now = Date.now()) {
+  const generated = new Date(meta?.generated).valueOf();
+  return (
+    Number.isFinite(generated) &&
+    generated <= now &&
+    now - generated <= 15 * 60000 &&
+    localDate(new Date(generated)) === localDate(new Date(now))
+  );
+}
+export function canUsePartialCollection(data) {
+  return data?.status === "incomplete" && canPlanWithCollection(data);
 }
 export function isCompleteCollection(data) {
   const c = data?.meta?.coverage;

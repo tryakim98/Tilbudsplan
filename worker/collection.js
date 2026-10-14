@@ -13,7 +13,7 @@ const SITE = "https://etilbudsavis.no/";
 const API = "https://squid-api.tjek.com/v2/";
 const LIMIT = 100;
 const BATCH = 4;
-const COLLECTION_VERSION = 3;
+const COLLECTION_VERSION = 4;
 const day = 86400000;
 const keyHash = async (key) =>
   [
@@ -65,7 +65,44 @@ export async function readSourceData(queries) {
   });
 }
 
-export async function discoverCatalogs(now = new Date()) {
+const STORE_SEARCHES = [
+  { area: "fredrikstad", latitude: 59.22, longitude: 10.94 },
+  { area: "sarpsborg", latitude: 59.28, longitude: 11.11 },
+  { area: "mysen", latitude: 59.55, longitude: 11.325 },
+];
+const STORE_CACHE_MS = 24 * 60 * 60000;
+
+function localStore(s, chain) {
+  const area = areaForStore(s);
+  if (
+    !area ||
+    typeof s.id !== "string" ||
+    !s.id.trim() ||
+    s.dealer_id !== chain.sourceId
+  )
+    return null;
+  return {
+    id: s.id,
+    area,
+    sourceId: chain.sourceId,
+    name: String(s.name || chain.label + " " + s.city).slice(0, 150),
+    city: s.city.slice(0, 80),
+    street: String(s.street || "").slice(0, 150),
+    postcode: String(s.zip_code || "").slice(0, 10),
+  };
+}
+function foodCatalog(c) {
+  const categories = c.category_ids || [];
+  return (
+    c.offer_count !== 0 &&
+    (!categories.length || categories.includes("groceries")) &&
+    !/\b(?:bygg|byggevarer|hagemøbler|elektronikk|oppskriftshefte|oppskriftsbok)\b/i.test(
+      c.label || "",
+    )
+  );
+}
+
+export async function discoverCatalogs(now = new Date(), storeCache = null) {
   const [answer] = await readSourceData([["businesses", {}]]);
   if (answer.error || !Array.isArray(answer.value))
     throw new Error(
@@ -79,21 +116,90 @@ export async function discoverCatalogs(now = new Date()) {
   );
   if (!businesses.length)
     throw new Error("Kilden returnerte ingen norske dagligvarekjeder.");
-  const ids = businesses.map((b) => b.publicId);
-  const catalogs = new Map();
-  const signatures = new Set();
-  // A short page is not proof of the end: some source interfaces filter rows.
-  // Always fetch the next offset, and require an empty terminal page.
+  const chains = businesses.map((b) => ({
+    ...chainInfo(b.name),
+    sourceId: b.publicId,
+    slug: b.slugs?.[0] || b.name,
+  }));
+  const byId = new Map(chains.map((c) => [c.sourceId, c]));
+  const warnings = [];
+  let stores, storeIndexAt;
+  const cacheDate = new Date(storeCache?.storeIndexAt);
+  if (
+    storeCache?.version === COLLECTION_VERSION &&
+    cacheDate <= now &&
+    now - cacheDate < STORE_CACHE_MS &&
+    Array.isArray(storeCache.storeIndex) &&
+    storeCache.storeIndex.length &&
+    !storeCache.discoveryWarnings?.length
+  ) {
+    stores = storeCache.storeIndex.filter(
+      (s) =>
+        typeof s.id === "string" &&
+        s.id.trim() &&
+        byId.has(s.sourceId) &&
+        areaForStore({ city: s.city, country: { id: "NO" } }) === s.area,
+    );
+    storeIndexAt = storeCache.storeIndexAt;
+  }
+  if (!stores?.length) {
+    // Three bounded nearby searches replace the nationwide flyer/store scan.
+    // Country, grocery chain and exact postal town are checked independently.
+    const replies = await Promise.allSettled(
+      STORE_SEARCHES.map(async (place) => {
+        const url = new URL("stores", API);
+        url.search = new URLSearchParams({
+          dealer_ids: [...byId.keys()].join(","),
+          r_lat: String(place.latitude),
+          r_lng: String(place.longitude),
+          limit: String(LIMIT),
+          offset: "0",
+        });
+        const rows = JSON.parse(await source(url));
+        if (!Array.isArray(rows) || rows.length > LIMIT)
+          throw new Error("Lokalt butikksøk svarte med et ukjent format.");
+        return rows.flatMap((s) => {
+          const chain = byId.get(s.dealer_id);
+          const local = chain && localStore(s, chain);
+          return local ? [local] : [];
+        });
+      }),
+    );
+    const indexed = new Map();
+    replies.forEach((reply, i) => {
+      if (reply.status === "fulfilled")
+        reply.value.forEach((s) => indexed.set(s.id, s));
+      else
+        warnings.push({
+          area: STORE_SEARCHES[i].area,
+          message:
+            "Butikker i området kunne ikke søkes opp: " + reply.reason.message,
+        });
+    });
+    stores = [...indexed.values()];
+    storeIndexAt = now.toISOString();
+  }
+  if (!stores.length)
+    throw new Error(
+      "Ingen lokale dagligvarebutikker kunne kontrolleres. Den eksisterende planen er beholdt.",
+    );
+  const localIds = new Set(stores.map((s) => s.sourceId));
+  const catalogs = new Map(),
+    signatures = new Set();
+  let skippedCatalogs = 0;
+  // The API filters on the actual local store IDs BEFORE returning flyers.
+  // No national fronts lookup and no nationwide fallback are performed.
   for (let offset = 0; ; offset += LIMIT) {
     const url = new URL("catalogs", API);
     url.search = new URLSearchParams({
-      dealer_ids: ids.join(","),
+      store_ids: stores.map((s) => s.id).join(","),
+      dealer_ids: [...localIds].join(","),
       limit: String(LIMIT),
       offset: String(offset),
     });
     const page = JSON.parse(await source(url));
-    if (!Array.isArray(page))
-      throw new Error("Avisregisteret har et ukjent format.");
+    if (!Array.isArray(page) || page.length > LIMIT)
+      throw new Error("Det lokale avisregisteret har et ukjent format.");
     if (!page.length) break;
     const signature = page
       .map((c) => c.id)
@@ -101,65 +207,39 @@ export async function discoverCatalogs(now = new Date()) {
       .join("|");
     if (signatures.has(signature) || offset >= 10000)
       throw new Error(
-        "Aviskilden fullfører ikke pagineringen. Innsamlingen er stoppet uten å godkjenne dekningen.",
+        "Det lokale avisregisteret gjentar sider. Hentingen er stoppet.",
       );
     signatures.add(signature);
-    for (const c of page) if (ids.includes(c.dealer_id)) catalogs.set(c.id, c);
-  }
-  const [fronts] = await readSourceData([
-    ["fronts", { businessIds: ids, hideInactive: false }],
-  ]);
-  if (fronts.error || !Array.isArray(fronts.value))
-    throw new Error("Kontrollen mot tilbudsavisenes forside feilet.");
-  const missing = fronts.value.flatMap((f) =>
-    (f.publications || [])
-      .filter((p) => !catalogs.has(p.id))
-      .map((p) => ({ p, b: f.business })),
-  );
-  for (let i = 0; i < missing.length; i += BATCH) {
-    const answers = await Promise.allSettled(
-      missing.slice(i, i + BATCH).map(async ({ p, b }) => {
-        const c = JSON.parse(
-          await source(new URL("catalogs/" + encodeURIComponent(p.id), API)),
-        );
-        if (!c || c.id !== p.id || c.dealer_id !== b.publicId)
-          throw new Error("Avismetadata stemmer ikke");
-        return c;
-      }),
-    );
-    answers.forEach((a, j) => {
-      if (a.status === "fulfilled") catalogs.set(a.value.id, a.value);
-      else {
-        const { p, b } = missing[i + j];
-        catalogs.set(p.id, {
-          id: p.id,
-          dealer_id: b.publicId,
-          label: p.label,
-          run_from: p.validFrom,
-          run_till: p.validUntil,
-          offer_count: null,
-          page_count: null,
-        });
+    for (const c of page) {
+      if (
+        !localIds.has(c.dealer_id) ||
+        !foodCatalog(c) ||
+        (c.run_from && new Date(c.run_from) > now) ||
+        (c.run_till && new Date(c.run_till) < now) ||
+        (c.publish && new Date(c.publish) > now)
+      ) {
+        skippedCatalogs++;
+        continue;
       }
-    });
+      if (typeof c.id !== "string" || !c.id.trim())
+        throw new Error("Avisen mangler en sikker ID.");
+      catalogs.set(c.id, c);
+    }
   }
-  const chains = businesses.map((b) => ({
-    ...chainInfo(b.name),
-    sourceId: b.publicId,
-    slug: b.slugs?.[0] || b.name,
-  }));
-  const active = [...catalogs.values()].filter(
-    (c) =>
-      (!c.run_till || new Date(c.run_till) >= now) &&
-      (!c.publish || new Date(c.publish) <= now),
-  );
-  if (!active.length)
-    throw new Error("Ingen publiserte, gyldige tilbudsaviser finnes i kilden.");
+  if (!catalogs.size)
+    throw new Error(
+      "Ingen gyldige mattilbudsaviser ble funnet for de lokale butikkene.",
+    );
   return {
     version: COLLECTION_VERSION,
     chains,
-    catalogs: active.map((c) => {
-      const chain = chains.find((b) => b.sourceId === c.dealer_id);
+    storeIndex: stores,
+    storeIndexAt,
+    discoveryWarnings: warnings,
+    skippedCatalogs,
+    catalogs: [...catalogs.values()].map((c) => {
+      const chain = byId.get(c.dealer_id),
+        nationwide = c.all_stores === true;
       return {
         id: c.id,
         chain: chain.key,
@@ -174,12 +254,15 @@ export async function discoverCatalogs(now = new Date()) {
         pages: c.page_count ?? null,
         validFrom: c.run_from,
         validUntil: c.run_till,
-        regional: c.all_stores !== true,
-        phase: "stores",
-        localStores: [],
+        regional: !nationwide,
+        phase: nationwide ? "modern" : "stores",
+        localStores: nationwide
+          ? stores.filter((s) => s.sourceId === chain.sourceId)
+          : [],
+        localityVerified: nationwide,
+        storesCheckedAt: nationwide ? now.toISOString() : null,
         storeIds: [],
         storeSignatures: [],
-        localityVerified: false,
         outsideArea: false,
         unlocated: false,
         locationIssue: null,
@@ -446,6 +529,7 @@ export function collectionCoverage(state) {
       regional: c.regional,
       localStores: c.localStores || [],
       localityVerified: c.localityVerified === true,
+      storageError: c.storageError === true,
       unlocated: c.unlocated === true,
       locationIssue: c.locationIssue || null,
     }));
@@ -460,7 +544,10 @@ export function collectionCoverage(state) {
   );
   return {
     complete:
-      catalogs.length > 0 && done === catalogs.length && gaps.length === 0,
+      catalogs.length > 0 &&
+      done === catalogs.length &&
+      gaps.length === 0 &&
+      !state.discoveryWarnings?.length,
     surveyedChains: state.chains.length,
     chainsWithFlyers: new Set(
       state.catalogs.filter((c) => c.localStores?.length).map((c) => c.chain),
@@ -475,6 +562,12 @@ export function collectionCoverage(state) {
       (c) => c.cached && c.localityVerified && c.localStores?.length,
     ).length,
     catalogsSurveyed: state.catalogs.length,
+    localStoresSurveyed: state.storeIndex?.length || 0,
+    localChainsSurveyed: new Set(
+      (state.storeIndex || []).map((s) => s.sourceId),
+    ).size,
+    skippedCatalogs: state.skippedCatalogs || 0,
+    discoveryWarnings: state.discoveryWarnings || [],
     catalogsExcluded: state.catalogs.filter((c) => c.outsideArea).length,
     catalogsUnlocated: state.catalogs.filter((c) => c.unlocated).length,
     locationsPending: state.catalogs.filter(
@@ -484,12 +577,21 @@ export function collectionCoverage(state) {
     scope:
       "Tilbudsaviser knyttet til butikker i " +
       LOCAL_AREA_LABEL +
-      ". Alle registrerte kjeder og avisvarianter undersøkes; aviser for andre steder utelates. Kilden kan mangle trykte tilbud eller butikker.",
+      ". Tre avgrensede butikksøk brukes. Bare mataviser knyttet til de lokale butikk-ID-ene hentes. Kilden kan mangle butikker og varer.",
   };
 }
 
 export async function startCollection(env, now = new Date(), force = false) {
-  const state = await discoverCatalogs(now);
+  let storeCache = null;
+  if (!force) {
+    const row = await env.DB.prepare(
+      "SELECT state FROM offer_runs WHERE completed_at>=? AND status IN ('complete','incomplete') ORDER BY completed_at DESC LIMIT 1",
+    )
+      .bind(new Date(now.valueOf() - STORE_CACHE_MS).toISOString())
+      .first();
+    if (row) storeCache = JSON.parse(row.state);
+  }
+  const state = await discoverCatalogs(now, storeCache);
   const key = [...crypto.getRandomValues(new Uint8Array(24))]
     .map((n) => n.toString(16).padStart(2, "0"))
     .join("");
@@ -610,6 +712,8 @@ export async function stepCollection(env, run, now = new Date()) {
           url.search = new URLSearchParams({
             limit: String(LIMIT),
             offset: String(c.offset),
+            r_lat: String(STORE_SEARCHES[0].latitude),
+            r_lng: String(STORE_SEARCHES[0].longitude),
           });
           return JSON.parse(await source(url));
         }),
@@ -686,7 +790,14 @@ export async function stepCollection(env, run, now = new Date()) {
             });
         }
         c.storeIds = [...seen];
-        c.offset += LIMIT;
+        if (c.localStores.length) {
+          // Positive local proof is sufficient: we do not enumerate the rest
+          // of a nationwide store list to establish the same fact again.
+          c.localityVerified = true;
+          c.storesCheckedAt = now.toISOString();
+          c.phase = "modern";
+          c.offset = 0;
+        } else c.offset += LIMIT;
       } catch (error) {
         c.error = "Lokal gyldighet kunne ikke kontrolleres: " + error.message;
         c.done = true;
@@ -867,13 +978,19 @@ export async function collectionResult(env, run, now = new Date()) {
   for (const c of state.catalogs) {
     const saved = savedIds.get(c.id)?.size || 0;
     if (saved !== c.count) {
+      c.storageError = true;
       c.error =
-        "Lagrede tilbud stemmer ikke med innsamlingen. Hent avisene på nytt.";
+        "Lagrede tilbud stemmer ikke med innsamlingen. Avisen brukes ikke; hent den på nytt.";
       c.count = saved;
     }
   }
   const coverage = collectionCoverage(state);
-  const products = [...unique.values()];
+  const damaged = new Set(
+    state.catalogs.filter((c) => c.storageError).map((c) => c.id),
+  );
+  const products = [...unique.values()].filter(
+    (o) => !damaged.has(o.publicationId),
+  );
   const cutoff = new Date(now.valueOf() - 365 * day).toISOString().slice(0, 10);
   const [old, observed, periods] = await Promise.all([
     env.DB.prepare(
@@ -935,7 +1052,7 @@ export async function collectionResult(env, run, now = new Date()) {
       shoppingArea: LOCAL_AREA_LABEL,
       localityVerified:
         state.version === COLLECTION_VERSION &&
-        state.catalogs.every((c) => c.localityVerified || c.unlocated),
+        products.every((o) => o.locality?.verified === true),
       coverage,
       historyWeeks: historyPeriods.size,
       historyFrom: dates[0] || null,

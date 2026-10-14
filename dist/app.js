@@ -30,6 +30,8 @@ import {
   createOfferCollector,
   canUsePartialCollection,
   isCompleteCollection,
+  canPlanWithCollection,
+  collectionIsFresh,
 } from "./collection-client.js";
 import {
   OFFER_TARGET,
@@ -253,27 +255,22 @@ function scaledStep(step) {
 function recipeActions(r) {
   return `<div class="recipe-actions"><button class="secondary-button" data-recipe="${r.id}">Se oppskrift</button><button class="save-button" data-save="${r.id}" aria-pressed="${s.p.saved.includes(r.id)}" aria-label="${s.p.saved.includes(r.id) ? "Fjern" : "Lagre"} ${html(r.title)}">${s.p.saved.includes(r.id) ? "♥ Lagret" : "♡ Lagre"}</button>${s.p.ratings[r.id] ? `<span class="rating-label">★ ${s.p.ratings[r.id]}/5</span>` : ""}</div>`;
 }
-async function generate({ allowPartial = false, replaceIndex } = {}) {
+async function generate({ replaceIndex } = {}) {
   if (s.loading) {
     toast("Vent et øyeblikk mens profilen lastes.");
     return;
   }
   if (s.collecting || s.planning) return;
-  if (allowPartial) {
-    if (!s.pendingPartial || s.collection?.status !== "incomplete") {
-      toast("Hentingen må avsluttes før du kan bruke tilbudene i en plan.");
-      return;
-    }
-    const completed = new Date(s.meta.collectionCompleted || s.meta.generated);
-    if (
-      !Number.isFinite(completed.valueOf()) ||
-      Date.now() - completed > 300000
-    ) {
-      toast("Kontrollerer tilbudene på nytt før ukeplanen lages …");
-      const complete = await collectAllOffers();
-      if (!complete && !s.pendingPartial) return;
-    }
-  } else if (!(await collectAllOffers())) return;
+  const loaded = {
+    status: s.collection?.status,
+    meta: s.meta,
+    products: s.offers,
+  };
+  if (
+    !(canPlanWithCollection(loaded) && collectionIsFresh(s.meta)) &&
+    !(await collectAllOffers())
+  )
+    return;
   s.pendingPartial = false;
   $("partial-plan").hidden = true;
   $("collection-next").hidden = true;
@@ -403,7 +400,7 @@ function renderPlan() {
   $("plan-data-basis").hidden = !s.p.plan.length || !s.p.planBasis;
   if (s.p.planBasis)
     $("plan-data-basis").textContent =
-      `${s.p.planBasis.complete ? "Kildens oppgitte antall tilbud ble kontrollert før planlegging." : "Tilbudsgrunnlaget har kildeavvik og er merket som ufullstendig. Se dekningsrapporten."} ${s.p.planBasis.offers} tilbud · ${s.p.planBasis.catalogs} aviser · hentet ${new Date(s.p.planBasis.generated).toLocaleString("nb-NO")}.${s.p.planBasis.newRecipes ? ` ${s.p.planBasis.newRecipes} nye retter ble bygget fra tilbudene.` : ""}${saving.lines ? ` ${money(saving.savings)} annonsert avslag på ${saving.lines} handlelinjer med sammenlignbar førpris; øvrige rabatter er ukjente.` : ""}`;
+      `${s.p.planBasis.complete ? "Kildens oppgitte antall tilbud ble kontrollert før planlegging." : "Planen bruker kontrollerte lokale tilbud. Kildens totale oversikt er ufullstendig; se dekningsrapporten."} ${s.p.planBasis.offers} tilbud · ${s.p.planBasis.catalogs} aviser · hentet ${new Date(s.p.planBasis.generated).toLocaleString("nb-NO")}.${s.p.planBasis.newRecipes ? ` ${s.p.planBasis.newRecipes} nye retter ble bygget fra tilbudene.` : ""}${saving.lines ? ` ${money(saving.savings)} annonsert avslag på ${saving.lines} handlelinjer med sammenlignbar førpris; øvrige rabatter er ukjente.` : ""}`;
   $("coverage-status").hidden = !s.p.plan.length;
   $("coverage-status").textContent =
     `${covered.offered} av ${covered.total} ulike varer som må kjøpes er på tilbud (${amount(covered.percent)} %). ${covered.percent < OFFER_TARGET || belowTarget.length ? `80 %-målet er ikke nådd${belowTarget.length ? " i " + belowTarget.length + " middager" : " for handlelisten"}. Hent tilbud og lag meny på nytt for nye oppskrifter.` : "80 %-målet er nådd for hver middag og hele handlelisten."} Andelen teller ulike varer, ikke kroner eller kilo. Faste lavpriser teller ikke som tilbud. Varer du har nok av hjemme for hele uka teller ikke.`;
@@ -869,7 +866,7 @@ function applyOfferData(data, fromCollection = false) {
     renderCollection(s.collection);
     if (!s.meta.coverage.complete)
       $("data-warning").textContent +=
-        " Tilbudsgrunnlaget er ufullstendig. Se dekningskontrollen.";
+        " Kilden har mangler. Kontrollerte lokale tilbud kan brukes i planen; 80 %-kravet gjelder fortsatt.";
   } else
     $("data-warning").textContent +=
       " Full innsamling kontrolleres når du lager en plan.";
@@ -885,22 +882,25 @@ function renderCollection(result) {
   const ended = c.catalogsDone === c.catalogsTotal;
   const errors = c.catalogs.filter((r) => r.error).length;
   $("collection-status").textContent = running
-    ? `${c.locationsPending ? `Kontrollerer butikktilknytningen for ${c.locationsPending} aviser. ` : ""}Henter lokale tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aktuelle aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
+    ? `${c.locationsPending ? `Bekrefter lokale butikker for ${c.locationsPending} aviser. ` : ""}Henter lokale tilbud: ${c.catalogsDone} av ${c.catalogsTotal} aktuelle aviser fullført · ${c.offersFetched} tilbud lest. Ukeplanen venter.`
     : c.complete
       ? `Kontrollert: ${c.offersFetched} registrerte lokale tilbud i ${c.catalogsTotal} aviser fra ${c.chainsWithFlyers} kjeder. ${c.surveyedChains} kjeder undersøkt.`
       : `Henting ${ended ? "avsluttet" : "uferdig"}: ${c.catalogsDone} av ${c.catalogsTotal} avisvarianter gjennomgått · ${c.offersFetched} tilbud lest. Dekningen er ufullstendig: ${c.gaps} avisvarianter med avvik og antallsavvik på ${c.missing}${c.extra ? ` · ${c.extra} flere registrerte enn oppgitt` : ""}.${errors ? ` ${errors} avisvarianter har hente- eller lagringsfeil.` : ""}`;
   $("collection-next").hidden = running || !ended || c.complete;
   if (ended && !c.complete)
     $("collection-next").textContent = errors
-      ? "Noen tilbud kunne ikke hentes eller kontrolleres. Ingen ny ukeplan er laget. Hent og kontroller lokale tilbud på nytt fra Tilbud-fanen."
-      : "Kildens oppgitte antall eller lokale butikktilknytning kan ikke bekreftes. Automatisk planlegging er stoppet, og den eksisterende planen er beholdt. Du kan uttrykkelig velge å bruke et ufullstendig grunnlag. 80 %-kravet og budsjettet gjelder fortsatt. Tilbud eldre enn fem minutter kontrolleres på nytt først.";
+      ? "Noen aviser kunne ikke hentes eller kontrolleres. Bekreftede tilbud fra de andre lokale avisene kan fortsatt brukes. Feil i lagrede avisdata holdes utenfor planen. Hent lokale tilbud på nytt for å prøve de manglende avisene igjen."
+      : "Kildens oppgitte antall kan ikke bekreftes. Dette stopper ikke planlegging med de lokale tilbudene som er hentet og kontrollert. Minst 80 % av handlevarene per middag og samlet må fortsatt være på tilbud, og budsjettet må nås.";
   $("collection-panel").classList.toggle(
     "has-gaps",
     !c.complete && result.status !== "collecting",
   );
-  if (c.catalogsSurveyed)
+  if (c.localStoresSurveyed)
     $("collection-status").textContent +=
-      ` ${c.catalogsSurveyed} aviser ${running ? "undersøkes" : "er undersøkt"}; ${c.catalogsExcluded} er utelatt fordi de gjelder butikker utenfor handleområdet.`;
+      ` Søket gjelder ${c.localStoresSurveyed} lokale butikker i ${c.localChainsSurveyed} kjeder. ${c.skippedCatalogs || 0} aviser uten aktuelle mattilbud er valgt bort før henting.`;
+  if (c.discoveryWarnings?.length)
+    $("collection-status").textContent +=
+      " " + c.discoveryWarnings.map((w) => w.message).join(" ");
   if (c.catalogsUnlocated)
     $("collection-status").textContent +=
       ` ${c.catalogsUnlocated} aviser mangler butikkadresser og er ikke brukt. Lokal dekning er derfor ufullstendig.`;
@@ -922,7 +922,7 @@ async function collectAllOffers(force = false) {
   const resuming = !force && offerCollector.pending;
   $("collection-status").textContent = resuming
     ? "Fortsetter den avbrutte tilbudshentingen fra sist lagrede side …"
-    : "Leser hele kjede- og avisregisteret før planlegging …";
+    : "Søker opp lokale dagligvarebutikker og deres mattilbudsaviser …";
   $("collection-progress").removeAttribute("value");
   const started = Date.now();
   let lastResponse = started;
@@ -962,20 +962,22 @@ async function collectAllOffers(force = false) {
     s.offerPage = 0;
     applyOfferData(data, true);
     if (!isCompleteCollection(data)) {
-      const errors = data.meta.coverage.catalogs.some((c) => c.error);
+      if (!canPlanWithCollection(data)) {
+        toast(
+          "Ingen kontrollerte lokale tilbud er klare for planlegging. Den eksisterende planen er beholdt.",
+        );
+        return false;
+      }
       toast(
-        errors
-          ? "Hentingen har kilde- eller lagringsfeil. Ingen ny ukeplan er laget."
-          : "Dekningen er ufullstendig. Ingen ny ukeplan er laget; se dekningsrapporten.",
+        "Planlegger med de kontrollerte lokale tilbudene. Kildemangler vises i dekningsrapporten.",
       );
-      return false;
     }
-    return true;
+    return canPlanWithCollection(data);
   } catch (error) {
     $("collection-panel").classList.add("has-gaps");
     $("collection-status").textContent =
       error.message +
-      " Full dekning er ikke bekreftet, og ingen ny plan er laget.";
+      " Ingen nye kontrollerte lokale tilbud er klare. Den eksisterende planen er beholdt.";
     $("resume-collection").hidden = !offerCollector.pending;
     $("collection-next").hidden = false;
     $("collection-next").textContent = offerCollector.pending
@@ -1214,9 +1216,7 @@ $("offers-next").addEventListener("click", () => {
   s.offerPage = Math.min(s.offerPages - 1, s.offerPage + 1);
   renderOffers();
 });
-$("partial-plan").addEventListener("click", () =>
-  generate({ allowPartial: true }),
-);
+$("partial-plan").addEventListener("click", () => generate());
 $("resume-collection").addEventListener("click", async () => {
   await collectAllOffers();
 });

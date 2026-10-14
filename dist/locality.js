@@ -26,6 +26,7 @@ const places = {
     "grålum",
     "hafslundsøy",
     "skjeberg",
+    "klavestadhaugen",
     "ise",
     "varteig",
   ],

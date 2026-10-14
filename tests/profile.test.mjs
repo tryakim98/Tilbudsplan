@@ -502,14 +502,14 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   click("#refresh-data");
   await wait(100);
   assert.equal(forcedCollection, true);
-  // Incomplete source coverage stops automatic planning; using it requires a separate explicit action.
+  // A forced refresh waits for completion; source count gaps then permit normal automatic planning.
   const prior = $("meal-plan").innerHTML;
   let finish;
   releaseCollection = new Promise((resolve) => {
     finish = resolve;
   });
   const starts = collectionStarts;
-  click("#generate-plan");
+  click("#refresh-data");
   await wait(25);
   assert.equal(collectionStarts, starts + 1);
   assert.equal($("meal-plan").innerHTML, prior);
@@ -520,23 +520,29 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   await wait(100);
   assert.equal($("partial-plan").hidden, false);
   assert.ok($("collection-status").textContent.includes("ufullstendig"));
+  const completeStarts = collectionStarts;
+  click("#generate-plan");
   await wait(500);
   assert.equal(
-    $("meal-plan").innerHTML,
-    prior,
-    "incomplete counts cannot replace the existing week",
+    collectionStarts,
+    completeStarts,
+    "a recent verified local subset is reused without another collection",
   );
-  click("#partial-plan");
-  await wait(500);
   assert.equal($("partial-plan").hidden, true);
   assert.ok($("plan-data-basis").textContent.includes("ufullstendig"));
+  assert.equal(document.querySelectorAll(".meal-card").length, 7);
+  assert.ok(!$("shopping-list").textContent.includes("Kun i Oslo"));
   const partialPlan = $("meal-plan").innerHTML;
   sourceStatus = "error";
-  click("#generate-plan");
+  click("#refresh-data");
   await wait(3200);
   assert.equal($("meal-plan").innerHTML, partialPlan);
   assert.equal($("partial-plan").hidden, true);
-  assert.ok($("collection-status").textContent.includes("ingen ny plan"));
+  assert.ok(
+    $("collection-status").textContent.includes(
+      "eksisterende planen er beholdt",
+    ),
+  );
   assert.equal($("resume-collection").hidden, false);
   const interruptedStarts = collectionStarts;
   sourceStatus = "incomplete";
@@ -552,7 +558,7 @@ test("UI: profile → saved recipe → rating → note → preferences → plan 
   await window.happyDOM.close();
 });
 
-test("UI: reload resumes unfinished collection; an older partial result is rechecked before planning", async () => {
+test("UI: reload resumes unfinished local collection; recent incomplete source data plans normally without another scan", async () => {
   const window = new Window({ url: "https://test.local/" });
   window.document.write(
     readFileSync(
@@ -664,10 +670,14 @@ test("UI: reload resumes unfinished collection; an older partial result is reche
   assert.equal(document.getElementById("collection-activity").hidden, true);
   assert.equal(document.getElementById("partial-plan").hidden, false);
   assert.equal(sessionStorage.getItem("tilbudsplan:collection-job"), null);
-  document.getElementById("partial-plan").click();
+  document.getElementById("generate-plan").click();
   await wait(100);
-  assert.equal(starts, 1, "older data must trigger a fresh coverage check");
-  assert.equal(steps, 2);
+  assert.equal(
+    starts,
+    0,
+    "ten-minute-old local prices should be reused rather than rescanned",
+  );
+  assert.equal(steps, 1);
   assert.equal(document.querySelectorAll(".meal-card").length, 7);
   assert.equal(document.getElementById("partial-plan").hidden, true);
   assert.ok(

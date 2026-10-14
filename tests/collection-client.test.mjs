@@ -5,6 +5,8 @@ import {
   createOfferCollector,
   isCompleteCollection,
   canUsePartialCollection,
+  canPlanWithCollection,
+  collectionIsFresh,
 } from "../dist/collection-client.js";
 
 const id = "11111111-1111-4111-8111-111111111111";
@@ -42,7 +44,7 @@ const options = (memory, fetchImpl) => ({
   now: () => instant,
 });
 
-test("planning requires complete counts; partial use requires a finished run without source or storage errors", () => {
+test("finished verified local offers can be planned despite source count gaps or an unavailable other flyer", () => {
   const data = {
     ...result,
     meta: {
@@ -57,6 +59,7 @@ test("planning requires complete counts; partial use requires a finished run wit
     },
   };
   assert.equal(isCompleteCollection(data), true);
+  assert.equal(canPlanWithCollection(data), true);
   assert.equal(isCompleteCollection(null), false);
   data.meta.coverage.catalogs[1].received = 1;
   assert.equal(
@@ -68,7 +71,11 @@ test("planning requires complete counts; partial use requires a finished run wit
   data.meta.coverage.complete = false;
   assert.equal(canUsePartialCollection(data), true);
   data.meta.coverage.catalogs[1].error = "Lagring feilet";
-  assert.equal(canUsePartialCollection(data), false);
+  assert.equal(
+    canUsePartialCollection(data),
+    true,
+    "an unavailable other flyer does not invalidate verified local prices",
+  );
   data.meta.coverage.catalogs[1].error = null;
   data.meta.coverage.catalogs[1].done = false;
   assert.equal(canUsePartialCollection(data), false);
@@ -86,6 +93,49 @@ test("planning requires complete counts; partial use requires a finished run wit
     canUsePartialCollection(data),
     false,
     "a trusted metadata flag cannot authorize an unverified offer",
+  );
+});
+
+test("damaged saved flyer data and unfinished collections cannot authorize planning; cached price dates are never refreshed", () => {
+  const data = {
+    ...result,
+    meta: {
+      ...result.meta,
+      coverage: {
+        ...coverage,
+        catalogs: [
+          { id: "a", done: true, storageError: true },
+          { id: "b", done: true },
+        ],
+      },
+    },
+    products: [{ id: "offer", publicationId: "a", locality: TEST_LOCALITY }],
+  };
+  assert.equal(canPlanWithCollection(data), false);
+  data.products[0].publicationId = "b";
+  assert.equal(canPlanWithCollection(data), true);
+  data.status = "collecting";
+  assert.equal(canPlanWithCollection(data), false);
+  assert.equal(
+    collectionIsFresh(
+      { generated: new Date(instant - 10 * 60000).toISOString() },
+      instant,
+    ),
+    true,
+  );
+  assert.equal(
+    collectionIsFresh(
+      { generated: new Date(instant - 16 * 60000).toISOString() },
+      instant,
+    ),
+    false,
+  );
+  assert.equal(
+    collectionIsFresh(
+      { generated: new Date(instant + 60000).toISOString() },
+      instant,
+    ),
+    false,
   );
 });
 
